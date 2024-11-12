@@ -10,7 +10,7 @@ const SECRET_KEY = "your_secret_key";
 
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: ["http://localhost:3000", "https://domain-rank-client.vercel.app"],
     methods: "GET,POST,PUT,DELETE",
     credentials: true,
   })
