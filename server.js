@@ -51,7 +51,7 @@ app.post("/login", (req, res) => {
       const token = jwt.sign(
         { id: user.id, email: user.email, name: user.name },
         SECRET_KEY,
-        { expiresIn: "1h" } // Token expiration
+        { expiresIn: "2d" } // Token expiration
       );
       res.json({
         message: "Login successful",
@@ -157,6 +157,42 @@ app.get("/projects/:id", verifyToken, (req, res) => {
   });
 });
 
+// Route to edit an existing project
+app.put("/projects/:id", verifyToken, (req, res) => {
+  const { id } = req.params;
+  const { name, domain_name, status } = req.body;
+  const { id: updated_by } = req.user;
+
+  //console.log("Incoming request body:", req.body);
+
+  const query = `
+    UPDATE projects 
+    SET name = ?, domain_name = ?, status = ?, updated_by = ?, last_used_date = CURRENT_TIMESTAMP
+    WHERE id = ?;
+  `;
+
+  db.run(query, [name, domain_name, status, updated_by, id], function (err) {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    res.json({
+      message: "Project updated successfully",
+      project: {
+        id,
+        name,
+        domain_name,
+        status,
+        updated_by,
+      },
+    });
+  });
+});
+
 // Route to delete a project
 app.delete("/projects/:id", verifyToken, (req, res) => {
   const { id } = req.params;
@@ -242,9 +278,107 @@ app.get("/keywords/:project_id", verifyToken, (req, res) => {
     }
 
     res.json({
-      message: "Keywords retrieved successfully",
+      message: "Keywords retrieved successfully ",
       keywords: rows,
     });
+  });
+});
+
+// Route to edit a keyword by its ID (updating only the latest_manual_check_rank)
+app.put("/keywords/:id", verifyToken, (req, res) => {
+  const { id } = req.params;
+  const { latest_manual_check_rank } = req.body;
+
+  if (
+    latest_manual_check_rank === undefined ||
+    isNaN(latest_manual_check_rank)
+  ) {
+    return res
+      .status(400)
+      .json({ message: "latest_manual_check_rank must be a valid integer." });
+  }
+
+  const query = `
+    UPDATE keywords
+    SET latest_manual_check_rank = ?
+    WHERE id = ?
+  `;
+
+  db.run(query, [latest_manual_check_rank, id], function (err) {
+    if (err) {
+      return res.status(500).json({ error: "Database error: " + err.message });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ message: "Keyword not found." });
+    }
+
+    res.json({
+      message: "Keyword updated successfully",
+      keyword: {
+        id,
+        latest_manual_check_rank,
+      },
+    });
+  });
+});
+
+// Route to edit a keyword by its ID (updating only the latest_auto_check_rank)
+app.put("/keywordsauto/:id", verifyToken, (req, res) => {
+  const { id } = req.params;
+  const { latest_auto_search_rank } = req.body;
+
+  console.log(latest_auto_search_rank, "node auto");
+
+  if (latest_auto_search_rank === undefined || isNaN(latest_auto_search_rank)) {
+    return res
+      .status(400)
+      .json({ message: "latest_auto_search_rank must be a valid integer." });
+  }
+
+  const query = `
+    UPDATE keywords
+    SET latest_auto_search_rank = ?
+    WHERE id = ?
+  `;
+
+  db.run(query, [latest_auto_search_rank, id], function (err) {
+    if (err) {
+      return res.status(500).json({ error: "Database error: " + err.message });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ message: "Keyword not found." });
+    }
+
+    res.json({
+      message: "Keyword updated successfully",
+      keyword: {
+        id,
+        latest_auto_search_rank,
+      },
+    });
+  });
+});
+
+// Route to delete a keyword by its ID
+app.delete("/keywords/:id", verifyToken, (req, res) => {
+  const { id } = req.params;
+
+  const query = `
+    DELETE FROM keywords WHERE id = ?
+  `;
+
+  db.run(query, [id], function (err) {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ message: "Keyword not found." });
+    }
+
+    res.json({ message: "Keyword deleted successfully" });
   });
 });
 

@@ -31,9 +31,11 @@ const db = new sqlite3.Database("./database.db", (err) => {
         domain_name TEXT,
         created_date TEXT DEFAULT CURRENT_TIMESTAMP,
         created_by INTEGER,
+        updated_by INTEGER, -- Add this line for updated_by
         last_used_date TEXT,
         status TEXT CHECK(status IN ('Active', 'Inactive')) DEFAULT 'Active',
-        FOREIGN KEY (created_by) REFERENCES users(id)
+        FOREIGN KEY (created_by) REFERENCES users(id),
+        FOREIGN KEY (updated_by) REFERENCES users(id) -- Add this foreign key constraint 
       )`,
       (err) => {
         if (err) {
@@ -65,6 +67,33 @@ const db = new sqlite3.Database("./database.db", (err) => {
         }
       }
     );
+
+    // Function to fetch and log data from a table
+    const showTableData = (tableName) => {
+      db.all(`SELECT * FROM ${tableName}`, (err, rows) => {
+        if (err) {
+          console.error(
+            `Error retrieving data from ${tableName}:`,
+            err.message
+          );
+        } else {
+          console.log(`\nData from ${tableName}:`);
+          console.table(rows);
+        }
+      });
+    };
+
+    db.all(`PRAGMA table_info(projects);`, (err, rows) => {
+      if (err) {
+        console.error("Error fetching table info:", err.message);
+      } else {
+        console.table(rows); // This will display the table structure
+      }
+    });
+
+    // showTableData("users");
+    //showTableData("projects");
+    //showTableData("keywords");
   }
 });
 
