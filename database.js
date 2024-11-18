@@ -83,13 +83,13 @@ const db = new sqlite3.Database("./database.db", (err) => {
       });
     };
 
-    db.all(`PRAGMA table_info(projects);`, (err, rows) => {
-      if (err) {
-        console.error("Error fetching table info:", err.message);
-      } else {
-        console.table(rows); // This will display the table structure
-      }
-    });
+    // db.all(`PRAGMA table_info(keywords);`, (err, rows) => {
+    //   if (err) {
+    //     console.error("Error fetching table info:", err.message);
+    //   } else {
+    //     console.table(rows); // This will display the table structure
+    //   }
+    // });
 
     // showTableData("users");
     //showTableData("projects");

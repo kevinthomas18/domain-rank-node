@@ -51,7 +51,7 @@ app.post("/login", (req, res) => {
       const token = jwt.sign(
         { id: user.id, email: user.email, name: user.name },
         SECRET_KEY,
-        { expiresIn: "1h" } // Token expiration
+        { expiresIn: "4h" } // Token expiration
       );
       res.json({
         message: "Login successful",
@@ -358,6 +358,35 @@ app.put("/keywordsauto/:id", verifyToken, (req, res) => {
         latest_auto_search_rank,
       },
     });
+  });
+});
+
+//update status of keyword
+app.put("/keywords/:id/status", verifyToken, (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  console.log(id, status, "status update");
+
+  if (!["Active", "Inactive"].includes(status)) {
+    return res.status(400).json({ error: "Invalid status value." });
+  }
+
+  const query = `
+    UPDATE keywords
+    SET status = ?
+    WHERE id = ?
+  `;
+
+  db.run(query, [status, id], function (err) {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ message: "Keyword not found." });
+    }
+
+    res.json({ message: `Keyword status updated to ${status}` });
   });
 });
 
