@@ -206,40 +206,35 @@ app.delete("/projects/:id", verifyToken, (req, res) => {
   });
 });
 
-// Route to add a new keyword to a project
+// Route to add a new keyword
 app.post("/keywords", verifyToken, (req, res) => {
   const {
     project_id,
     keyword,
     search_engine,
-    search_location,
-    latest_auto_search_rank,
-    latest_manual_check_rank,
-    status = "Active",
+    search_location = "Default Location",
+    status = "Active", // Default value
   } = req.body;
+
   const { id: created_by } = req.user;
 
   const query = `
-      INSERT INTO keywords (project_id, keyword, search_engine, search_location, latest_auto_search_rank, latest_manual_check_rank, created_by, status) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `;
+    INSERT INTO keywords (
+      project_id, keyword, search_engine, search_location, created_by, status
+    ) 
+    VALUES (?, ?, ?, ?, ?, ?)
+  `;
 
   db.run(
     query,
-    [
-      project_id,
-      keyword,
-      search_engine,
-      search_location,
-      latest_auto_search_rank,
-      latest_manual_check_rank,
-      created_by,
-      status,
-    ],
+    [project_id, keyword, search_engine, search_location, created_by, status],
     function (err) {
       if (err) {
-        return res.status(400).json({ error: err.message });
+        return res
+          .status(400)
+          .json({ error: "Database error: " + err.message });
       }
+
       res.json({
         message: "Keyword created successfully",
         keyword: {
@@ -248,10 +243,9 @@ app.post("/keywords", verifyToken, (req, res) => {
           keyword,
           search_engine,
           search_location,
-          latest_auto_search_rank,
-          latest_manual_check_rank,
           created_by,
           status,
+          created_date: new Date().toISOString(),
         },
       });
     }
@@ -284,10 +278,10 @@ app.get("/keywords/:project_id", verifyToken, (req, res) => {
   });
 });
 
-// Route to edit a keyword by its ID (updating only the latest_manual_check_rank)
+//updating  the latest_manual_check_rank
 app.put("/keywords/:id", verifyToken, (req, res) => {
-  const { id } = req.params;
-  const { latest_manual_check_rank } = req.body;
+  const { id: keyword_id } = req.params;
+  const { website_id, latest_manual_check_rank } = req.body;
 
   if (
     latest_manual_check_rank === undefined ||
@@ -298,37 +292,90 @@ app.put("/keywords/:id", verifyToken, (req, res) => {
       .json({ message: "latest_manual_check_rank must be a valid integer." });
   }
 
-  const query = `
-    UPDATE keywords
-    SET latest_manual_check_rank = ?
-    WHERE id = ?
+  if (!website_id || isNaN(website_id)) {
+    return res
+      .status(400)
+      .json({ message: "website_id must be a valid integer." });
+  }
+
+  // Query to check if the mapping already exists
+  const checkQuery = `
+    SELECT id FROM Keyword_Website_mapping 
+    WHERE keyword_id = ? AND website_id = ?
   `;
 
-  db.run(query, [latest_manual_check_rank, id], function (err) {
+  db.get(checkQuery, [keyword_id, website_id], (err, row) => {
     if (err) {
       return res.status(500).json({ error: "Database error: " + err.message });
     }
 
-    if (this.changes === 0) {
-      return res.status(404).json({ message: "Keyword not found." });
-    }
+    if (row) {
+      // If row exists, update the entry
+      const updateQuery = `
+        UPDATE Keyword_Website_mapping 
+        SET latest_manual_check_rank = ?, last_check_date = CURRENT_TIMESTAMP
+        WHERE keyword_id = ? AND website_id = ?
+      `;
 
-    res.json({
-      message: "Keyword updated successfully",
-      keyword: {
-        id,
-        latest_manual_check_rank,
-      },
-    });
+      db.run(
+        updateQuery,
+        [latest_manual_check_rank, keyword_id, website_id],
+        function (err) {
+          if (err) {
+            return res
+              .status(500)
+              .json({ error: "Database error while updating: " + err.message });
+          }
+
+          res.json({
+            message: "Mapping updated successfully",
+            mapping: {
+              id: row.id,
+              keyword_id,
+              website_id,
+              latest_manual_check_rank,
+            },
+          });
+        }
+      );
+    } else {
+      // If row does not exist, insert a new mapping
+      const insertQuery = `
+        INSERT INTO Keyword_Website_mapping (
+          keyword_id, website_id, latest_manual_check_rank, last_check_date
+        )
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      `;
+
+      db.run(
+        insertQuery,
+        [keyword_id, website_id, latest_manual_check_rank],
+        function (err) {
+          if (err) {
+            return res.status(500).json({
+              error: "Database error while inserting: " + err.message,
+            });
+          }
+
+          res.json({
+            message: "Mapping added successfully",
+            mapping: {
+              id: this.lastID,
+              keyword_id,
+              website_id,
+              latest_manual_check_rank,
+            },
+          });
+        }
+      );
+    }
   });
 });
 
-// Route to edit a keyword by its ID (updating only the latest_auto_check_rank)
+// updating the latest_auto_check_rank
 app.put("/keywordsauto/:id", verifyToken, (req, res) => {
-  const { id } = req.params;
-  const { latest_auto_search_rank } = req.body;
-
-  console.log(latest_auto_search_rank, "node auto");
+  const { id: keyword_id } = req.params;
+  const { website_id, latest_auto_search_rank } = req.body;
 
   if (latest_auto_search_rank === undefined || isNaN(latest_auto_search_rank)) {
     return res
@@ -336,28 +383,80 @@ app.put("/keywordsauto/:id", verifyToken, (req, res) => {
       .json({ message: "latest_auto_search_rank must be a valid integer." });
   }
 
-  const query = `
-    UPDATE keywords
-    SET latest_auto_search_rank = ?
-    WHERE id = ?
+  if (!website_id || isNaN(website_id)) {
+    return res
+      .status(400)
+      .json({ message: "website_id must be a valid integer." });
+  }
+
+  const checkQuery = `
+    SELECT id FROM Keyword_Website_mapping 
+    WHERE keyword_id = ? AND website_id = ?
   `;
 
-  db.run(query, [latest_auto_search_rank, id], function (err) {
+  db.get(checkQuery, [keyword_id, website_id], (err, row) => {
     if (err) {
       return res.status(500).json({ error: "Database error: " + err.message });
     }
 
-    if (this.changes === 0) {
-      return res.status(404).json({ message: "Keyword not found." });
-    }
+    if (row) {
+      const updateQuery = `
+        UPDATE Keyword_Website_mapping 
+        SET latest_auto_search_rank = ?, last_check_date = CURRENT_TIMESTAMP
+        WHERE keyword_id = ? AND website_id = ?
+      `;
 
-    res.json({
-      message: "Keyword updated successfully",
-      keyword: {
-        id,
-        latest_auto_search_rank,
-      },
-    });
+      db.run(
+        updateQuery,
+        [latest_auto_search_rank, keyword_id, website_id],
+        function (err) {
+          if (err) {
+            return res
+              .status(500)
+              .json({ error: "Database error while updating: " + err.message });
+          }
+
+          res.json({
+            message: "Mapping updated successfully",
+            mapping: {
+              id: row.id,
+              keyword_id,
+              website_id,
+              latest_auto_search_rank,
+            },
+          });
+        }
+      );
+    } else {
+      const insertQuery = `
+        INSERT INTO Keyword_Website_mapping (
+          keyword_id, website_id, latest_auto_search_rank, last_check_date
+        )
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      `;
+
+      db.run(
+        insertQuery,
+        [keyword_id, website_id, latest_auto_search_rank],
+        function (err) {
+          if (err) {
+            return res.status(500).json({
+              error: "Database error while inserting: " + err.message,
+            });
+          }
+
+          res.json({
+            message: "Mapping added successfully",
+            mapping: {
+              id: this.lastID,
+              keyword_id,
+              website_id,
+              latest_auto_search_rank,
+            },
+          });
+        }
+      );
+    }
   });
 });
 
@@ -365,7 +464,6 @@ app.put("/keywordsauto/:id", verifyToken, (req, res) => {
 app.put("/keywords/:id/status", verifyToken, (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
-  console.log(id, status, "status update");
 
   if (!["Active", "Inactive"].includes(status)) {
     return res.status(400).json({ error: "Invalid status value." });
@@ -408,6 +506,157 @@ app.delete("/keywords/:id", verifyToken, (req, res) => {
     }
 
     res.json({ message: "Keyword deleted successfully" });
+  });
+});
+
+//route to join keywords and rank route
+app.get(
+  "/ranks/project/:project_id/website/:website_id",
+  verifyToken,
+  (req, res) => {
+    const { project_id, website_id } = req.params;
+
+    if (isNaN(project_id) || isNaN(website_id)) {
+      return res
+        .status(400)
+        .json({ message: "project_id and website_id must be valid integers." });
+    }
+
+    // Query to fetch all keywords for the given project_id and join with ranks from Keyword_Website_mapping
+    const query = `
+    SELECT 
+      k.id AS keyword_id,
+      k.keyword,
+      k.project_id,
+      k.search_location,
+      k.search_engine,
+      k.status AS keyword_status,
+      k.created_date AS keyword_created_date,
+      kwm.latest_auto_search_rank,
+      kwm.latest_manual_check_rank,
+      kwm.last_check_date
+    FROM keywords AS k
+    LEFT JOIN Keyword_Website_mapping AS kwm
+      ON k.id = kwm.keyword_id
+      AND kwm.website_id = ?
+    WHERE k.project_id = ?
+  `;
+
+    db.all(query, [website_id, project_id], (err, rows) => {
+      if (err) {
+        return res
+          .status(500)
+          .json({ error: "Database error: " + err.message });
+      }
+
+      if (rows.length === 0) {
+        return res.status(404).json({
+          message: "No records found for the given project_id and website_id.",
+        });
+      }
+
+      res.json({
+        message: "Ranks fetched successfully",
+        data: rows,
+      });
+    });
+  }
+);
+
+//route to add new website
+app.post("/websites", verifyToken, (req, res) => {
+  const {
+    project_id,
+    website,
+    ownership_type,
+    website_type,
+    status = "Active",
+  } = req.body;
+  const { id: created_by } = req.user;
+
+  if (!project_id || !website || !ownership_type || !website_type) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  const query = `
+    INSERT INTO websites (project_id, website, ownership_type, website_type, created_by, status) 
+    VALUES (?, ?, ?, ?, ?, ?)
+  `;
+
+  db.run(
+    query,
+    [project_id, website, ownership_type, website_type, created_by, status],
+    function (err) {
+      if (err) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.json({
+        message: "Website added successfully",
+        website: {
+          id: this.lastID,
+          project_id,
+          website,
+          ownership_type,
+          website_type,
+          created_by,
+          status,
+        },
+      });
+    }
+  );
+});
+
+// Route to get all websites for a specific project
+app.get("/websites/:project_id", verifyToken, (req, res) => {
+  const { project_id } = req.params;
+
+  const query = `
+      SELECT * FROM websites WHERE project_id = ?
+    `;
+
+  db.all(query, [project_id], (err, rows) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No websites found for this project." });
+    }
+
+    res.json({
+      message: "websites retrieved successfully ",
+      websites: rows,
+    });
+  });
+});
+
+//update status of website
+app.put("/website/:id/status", verifyToken, (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!["Active", "Inactive"].includes(status)) {
+    return res.status(400).json({ error: "Invalid status value." });
+  }
+
+  const query = `
+    UPDATE websites
+    SET status = ?
+    WHERE id = ?
+  `;
+
+  db.run(query, [status, id], function (err) {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ message: "Website not found." });
+    }
+
+    res.json({ message: `Website status updated to ${status}` });
   });
 });
 
