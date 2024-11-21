@@ -373,6 +373,94 @@ app.put("/keywords/:id", verifyToken, (req, res) => {
 });
 
 // updating the latest_auto_check_rank
+// app.put("/keywordsauto/:id", verifyToken, (req, res) => {
+//   const { id: keyword_id } = req.params;
+//   const { website_id, latest_auto_search_rank } = req.body;
+
+//   if (latest_auto_search_rank === undefined || isNaN(latest_auto_search_rank)) {
+//     return res
+//       .status(400)
+//       .json({ message: "latest_auto_search_rank must be a valid integer." });
+//   }
+
+//   if (!website_id || isNaN(website_id)) {
+//     return res
+//       .status(400)
+//       .json({ message: "website_id must be a valid integer." });
+//   }
+
+//   const checkQuery = `
+//     SELECT id FROM Keyword_Website_mapping
+//     WHERE keyword_id = ? AND website_id = ?
+//   `;
+
+//   db.get(checkQuery, [keyword_id, website_id], (err, row) => {
+//     if (err) {
+//       return res.status(500).json({ error: "Database error: " + err.message });
+//     }
+
+//     if (row) {
+//       const updateQuery = `
+//         UPDATE Keyword_Website_mapping
+//         SET latest_auto_search_rank = ?, last_check_date = CURRENT_TIMESTAMP
+//         WHERE keyword_id = ? AND website_id = ?
+//       `;
+
+//       db.run(
+//         updateQuery,
+//         [latest_auto_search_rank, keyword_id, website_id],
+//         function (err) {
+//           if (err) {
+//             return res
+//               .status(500)
+//               .json({ error: "Database error while updating: " + err.message });
+//           }
+
+//           res.json({
+//             message: "Mapping updated successfully",
+//             mapping: {
+//               id: row.id,
+//               keyword_id,
+//               website_id,
+//               latest_auto_search_rank,
+//             },
+//           });
+//         }
+//       );
+//     } else {
+//       const insertQuery = `
+//         INSERT INTO Keyword_Website_mapping (
+//           keyword_id, website_id, latest_auto_search_rank, last_check_date
+//         )
+//         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+//       `;
+
+//       db.run(
+//         insertQuery,
+//         [keyword_id, website_id, latest_auto_search_rank],
+//         function (err) {
+//           if (err) {
+//             return res.status(500).json({
+//               error: "Database error while inserting: " + err.message,
+//             });
+//           }
+
+//           res.json({
+//             message: "Mapping added successfully",
+//             mapping: {
+//               id: this.lastID,
+//               keyword_id,
+//               website_id,
+//               latest_auto_search_rank,
+//             },
+//           });
+//         }
+//       );
+//     }
+//   });
+// });
+
+// updating the latest_auto_check_rank and also populating the rankhistory table
 app.put("/keywordsauto/:id", verifyToken, (req, res) => {
   const { id: keyword_id } = req.params;
   const { website_id, latest_auto_search_rank } = req.body;
@@ -399,6 +487,27 @@ app.put("/keywordsauto/:id", verifyToken, (req, res) => {
       return res.status(500).json({ error: "Database error: " + err.message });
     }
 
+    const updateRankHistory = (callback) => {
+      const insertRankHistoryQuery = `
+        INSERT INTO rankhistory (keyword_id, website_id, rank, checked_date)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      `;
+
+      db.run(
+        insertRankHistoryQuery,
+        [keyword_id, website_id, latest_auto_search_rank],
+        (err) => {
+          if (err) {
+            return res.status(500).json({
+              error:
+                "Database error while updating rankhistory: " + err.message,
+            });
+          }
+          callback();
+        }
+      );
+    };
+
     if (row) {
       const updateQuery = `
         UPDATE Keyword_Website_mapping 
@@ -416,14 +525,16 @@ app.put("/keywordsauto/:id", verifyToken, (req, res) => {
               .json({ error: "Database error while updating: " + err.message });
           }
 
-          res.json({
-            message: "Mapping updated successfully",
-            mapping: {
-              id: row.id,
-              keyword_id,
-              website_id,
-              latest_auto_search_rank,
-            },
+          updateRankHistory(() => {
+            res.json({
+              message: "Mapping updated and rankhistory recorded successfully",
+              mapping: {
+                id: row.id,
+                keyword_id,
+                website_id,
+                latest_auto_search_rank,
+              },
+            });
           });
         }
       );
@@ -445,14 +556,16 @@ app.put("/keywordsauto/:id", verifyToken, (req, res) => {
             });
           }
 
-          res.json({
-            message: "Mapping added successfully",
-            mapping: {
-              id: this.lastID,
-              keyword_id,
-              website_id,
-              latest_auto_search_rank,
-            },
+          updateRankHistory(() => {
+            res.json({
+              message: "Mapping added and rankhistory recorded successfully",
+              mapping: {
+                id: this.lastID,
+                keyword_id,
+                website_id,
+                latest_auto_search_rank,
+              },
+            });
           });
         }
       );
@@ -522,7 +635,6 @@ app.get(
         .json({ message: "project_id and website_id must be valid integers." });
     }
 
-    // Query to fetch all keywords for the given project_id and join with ranks from Keyword_Website_mapping
     const query = `
     SELECT 
       k.id AS keyword_id,
@@ -562,6 +674,39 @@ app.get(
     });
   }
 );
+
+//route to retrieves all keywords for a specific project along with their corresponding rank for each website
+app.get("/project/:projectId/keywords", (req, res) => {
+  const projectId = req.params.projectId;
+
+  const query = `
+    SELECT 
+      k.id AS keyword_id,
+      k.keyword,
+      k.search_location,
+      k.search_engine,
+      w.id AS website_id,
+      w.website,
+      w.ownership_type,
+      w.website_type,
+      kwm.latest_auto_search_rank,
+      kwm.latest_manual_check_rank,
+      kwm.last_check_date
+    FROM keywords k
+    INNER JOIN Keyword_Website_mapping kwm ON k.id = kwm.keyword_id
+    INNER JOIN websites w ON kwm.website_id = w.id
+    WHERE k.project_id = ?
+    ORDER BY k.keyword, w.website;
+  `;
+
+  db.all(query, [projectId], (err, rows) => {
+    if (err) {
+      console.error("Error fetching keywords:", err.message);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+    res.json(rows);
+  });
+});
 
 //route to add new website
 app.post("/websites", verifyToken, (req, res) => {
@@ -657,6 +802,32 @@ app.put("/website/:id/status", verifyToken, (req, res) => {
     }
 
     res.json({ message: `Website status updated to ${status}` });
+  });
+});
+
+// Route to get rank and date by keyword_id and website_id
+app.get("/rankhistory/:keywordId/:websiteId", (req, res) => {
+  const { keywordId, websiteId } = req.params;
+
+  const query = `
+    SELECT rank, checked_date 
+    FROM rankhistory 
+    WHERE keyword_id = ? AND website_id = ?
+  `;
+
+  db.all(query, [keywordId, websiteId], (err, row) => {
+    if (err) {
+      console.error("Error fetching data:", err.message);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+
+    if (!row) {
+      return res.status(404).json({
+        message: "No record found for the given keyword and website.",
+      });
+    }
+
+    res.json(row);
   });
 });
 

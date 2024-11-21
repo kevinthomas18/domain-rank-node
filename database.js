@@ -69,6 +69,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
       `CREATE TABLE IF NOT EXISTS rankhistory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         keyword_id INTEGER,
+        website_id INTEGER,
         rank INTEGER,
         checked_date TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (keyword_id) REFERENCES keywords(id)
@@ -136,7 +137,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
       });
     };
 
-    // db.all(`PRAGMA table_info(keywords);`, (err, rows) => {
+    // db.all(`PRAGMA table_info(rankhistory);`, (err, rows) => {
     //   if (err) {
     //     console.error("Error fetching table info:", err.message);
     //   } else {
@@ -149,6 +150,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //showTableData("keywords");
     //showTableData("websites");
     //showTableData("Keyword_Website_mapping");
+    showTableData("rankhistory");
   }
 });
 
