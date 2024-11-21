@@ -463,12 +463,10 @@ app.put("/keywords/:id", verifyToken, (req, res) => {
 // updating the latest_auto_check_rank and also populating the rankhistory table
 app.put("/keywordsauto/:id", verifyToken, (req, res) => {
   const { id: keyword_id } = req.params;
-  const { website_id, latest_auto_search_rank } = req.body;
+  let { website_id, latest_auto_search_rank } = req.body;
 
   if (latest_auto_search_rank === undefined || isNaN(latest_auto_search_rank)) {
-    return res
-      .status(400)
-      .json({ message: "latest_auto_search_rank must be a valid integer." });
+    latest_auto_search_rank = -1; // Set to -1 if invalid
   }
 
   if (!website_id || isNaN(website_id)) {

@@ -150,7 +150,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //showTableData("keywords");
     //showTableData("websites");
     //showTableData("Keyword_Website_mapping");
-    showTableData("rankhistory");
+    //showTableData("rankhistory");
   }
 });
 
