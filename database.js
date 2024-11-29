@@ -122,6 +122,67 @@ const db = new sqlite3.Database("./database.db", (err) => {
       }
     );
 
+    db.run(
+      `CREATE TABLE IF NOT EXISTS Site_Audits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            website_id INTEGER NOT NULL,
+            audit_date_time TEXT DEFAULT CURRENT_TIMESTAMP,
+            audit_by INTEGER NOT NULL,
+            audit_status TEXT CHECK(audit_status IN ('Not started', 'In progress', 'Completed')) DEFAULT 'Not started',
+            FOREIGN KEY (website_id) REFERENCES websites(id)
+          )`,
+      (err) => {
+        if (err) {
+          console.error("Error creating Site_Audits table:", err.message);
+        }
+      }
+    );
+
+    db.run(
+      `CREATE TABLE IF NOT EXISTS Site_Audit_Pages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            audit_id INTEGER NOT NULL,
+            crawl_status TEXT CHECK(crawl_status IN ('Not started', 'Completed')) DEFAULT 'Not started',
+            url TEXT NOT NULL,
+            linked_from TEXT,
+            page_size INTEGER,
+            response_time_ms INTEGER,
+            found_in_crawl BOOLEAN,
+            found_in_sitemap BOOLEAN,
+            found_in_analytics BOOLEAN,
+            found_in_search_console BOOLEAN,
+            meta_title TEXT,
+            meta_description TEXT,
+            meta_keywords TEXT,
+            FOREIGN KEY (audit_id) REFERENCES Site_Audits(id)
+          )`,
+      (err) => {
+        if (err) {
+          console.error("Error creating Site_Audit_Pages table:", err.message);
+        }
+      }
+    );
+
+    db.run(
+      `CREATE TABLE IF NOT EXISTS Site_Audit_Images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            audit_id INTEGER NOT NULL,
+            crawl_status TEXT CHECK(crawl_status IN ('Not started', 'Completed')) DEFAULT 'Not started',
+            image_url TEXT NOT NULL,
+            linked_from TEXT,
+            image_size INTEGER,
+            alt_text TEXT,
+            file_name TEXT,
+            response_time_ms INTEGER,
+            FOREIGN KEY (audit_id) REFERENCES Site_Audits(id)
+          )`,
+      (err) => {
+        if (err) {
+          console.error("Error creating Site_Audit_Images table:", err.message);
+        }
+      }
+    );
+
     // Function to fetch and log data from a table
     const showTableData = (tableName) => {
       db.all(`SELECT * FROM ${tableName}`, (err, rows) => {
@@ -137,7 +198,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
       });
     };
 
-    // db.all(`PRAGMA table_info(rankhistory);`, (err, rows) => {
+    // db.all(`PRAGMA table_info(Site_Audit_Images);`, (err, rows) => {
     //   if (err) {
     //     console.error("Error fetching table info:", err.message);
     //   } else {
@@ -151,6 +212,8 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //showTableData("websites");
     //showTableData("Keyword_Website_mapping");
     //showTableData("rankhistory");
+    //showTableData("Site_Audit_Pages");
+    //showTableData("Site_Audit_Images");
   }
 });
 
