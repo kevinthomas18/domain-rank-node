@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const cheerio = require("cheerio");
@@ -5,7 +6,14 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 
 const Queue = require("bull");
-const scrapeQueue = new Queue("scrapeQueue");
+//const scrapeQueue = new Queue("scrapeQueue");
+const scrapeQueue = new Queue("scrapeQueue", {
+  redis: {
+    host: process.env.REDISCLOUD_HOST,
+    port: process.env.REDISCLOUD_PORT,
+    password: process.env.REDISCLOUD_PASSWORD,
+  },
+});
 
 const redis = require("redis");
 const client = redis.createClient();
