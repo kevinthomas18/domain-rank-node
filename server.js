@@ -24,6 +24,17 @@ const app = express();
 const PORT = 4000;
 const SECRET_KEY = "your_secret_key";
 
+// const http = require("http");
+// const { Server } = require("socket.io");
+
+// const server = http.createServer(app);
+// const io = new Server(server, {
+//   cors: {
+//     origin: "http://localhost:3000",
+//     methods: ["GET", "POST"],
+//   },
+// });
+
 app.use(
   cors({
     origin: ["http://localhost:3000", "https://domain-rank-client.vercel.app"],
@@ -846,9 +857,8 @@ app.get("/rankhistory/:keywordId/:websiteId", (req, res) => {
 });
 
 //route and function for site audit
-const visitedUrls = new Set();
-const uniqueLinks = new Set();
-const uniqueImages = new Set();
+let uniqueLinks = new Set();
+let uniqueImages = new Set();
 
 app.get("/scrape", async (req, res) => {
   const { url } = req.query;
@@ -874,36 +884,36 @@ app.get("/scrape", async (req, res) => {
 });
 
 //test save to db function
-const scrapeAllPages = async (startUrl, baseDomain, websiteId, auditBy) => {
+const scrapeAllPages = async (
+  startUrl,
+  baseDomain,
+  websiteId,
+  auditBy,
+  progressCallback
+) => {
   const queue = [startUrl];
   const scrapedData = [];
-  const uniqueLinks = new Set();
-  const uniqueImages = new Set();
   const visitedUrls = new Set();
+
+  const uniqueLinks = new Set(); // Local reset of uniqueLinks
+  const uniqueImages = new Set();
 
   while (queue.length > 0) {
     const currentUrl = queue.shift();
 
-    if (visitedUrls.has(currentUrl)) {
-      continue;
-    }
-
-    console.log(`Scraping URL: ${currentUrl}`);
-    visitedUrls.add(currentUrl); // Mark URL as visited
+    if (visitedUrls.has(currentUrl)) continue;
+    visitedUrls.add(currentUrl);
 
     try {
       const { data: html } = await axios.get(currentUrl);
       const $ = cheerio.load(html);
 
       const title = $("title").text();
-
       const metaTags = {};
       $("meta").each((_, el) => {
         const name = $(el).attr("name") || $(el).attr("property");
         const content = $(el).attr("content");
-        if (name && content) {
-          metaTags[name] = content;
-        }
+        if (name && content) metaTags[name] = content;
       });
 
       const links = [];
@@ -912,16 +922,26 @@ const scrapeAllPages = async (startUrl, baseDomain, websiteId, auditBy) => {
         if (href) {
           const resolvedUrl = new URL(href, currentUrl).href;
 
-          // Exclude image URLs based on file extensions
+          const imageExtensions = [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".svg",
+          ];
+          const isImageLink = imageExtensions.some((ext) =>
+            resolvedUrl.toLowerCase().endsWith(ext)
+          );
+
           if (
-            !/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i.test(resolvedUrl) &&
+            !isImageLink &&
+            !visitedUrls.has(resolvedUrl) &&
             isSameDomain(resolvedUrl, baseDomain)
           ) {
             links.push(resolvedUrl);
-            uniqueLinks.add(resolvedUrl); // Add to unique links
-            if (!visitedUrls.has(resolvedUrl)) {
-              queue.push(resolvedUrl);
-            }
+            uniqueLinks.add(resolvedUrl);
+            queue.push(resolvedUrl);
           }
         }
       });
@@ -932,7 +952,7 @@ const scrapeAllPages = async (startUrl, baseDomain, websiteId, auditBy) => {
         if (src) {
           const resolvedImage = new URL(src, currentUrl).href;
           images.push(resolvedImage);
-          uniqueImages.add(resolvedImage); // Add to unique images
+          uniqueImages.add(resolvedImage);
         }
       });
 
@@ -948,110 +968,33 @@ const scrapeAllPages = async (startUrl, baseDomain, websiteId, auditBy) => {
         favicon: favicon ? new URL(favicon, currentUrl).href : null,
         canonical,
       });
+
+      if (progressCallback) {
+        progressCallback(scrapedData, queue.length);
+      }
     } catch (error) {
-      console.error(`Failed to scrape URL: ${currentUrl} - ${error.message}`);
+      console.error(`Failed to scrape ${currentUrl}: ${error.message}`);
     }
   }
 
-  // Save the scraped data to the database
-  try {
-    await saveAuditData(websiteId, auditBy, {
-      uniqueLinks: Array.from(uniqueLinks),
-      uniqueImages: Array.from(uniqueImages),
-      pages: scrapedData,
-    });
-    console.log("Scraped data has been saved to the database.");
-  } catch (error) {
-    console.error("Failed to save audit data:", error.message);
-  }
+  await saveAuditData(websiteId, auditBy, {
+    uniqueLinks: Array.from(uniqueLinks),
+    uniqueImages: Array.from(uniqueImages),
+    pages: scrapedData,
+  });
 
-  return scrapedData;
+  return {
+    uniqueLinks: Array.from(uniqueLinks),
+    uniqueImages: Array.from(uniqueImages),
+    pages: scrapedData,
+  };
 };
-
-// const scrapeAllPages = async (startUrl, baseDomain) => {
-//   const queue = [startUrl];
-//   const scrapedData = [];
-
-//   while (queue.length > 0) {
-//     const currentUrl = queue.shift();
-
-//     if (visitedUrls.has(currentUrl)) {
-//       continue;
-//     }
-
-//     console.log(`Scraping URL: ${currentUrl}`);
-//     visitedUrls.add(currentUrl); // Mark URL as visited
-
-//     try {
-//       const { data: html } = await axios.get(currentUrl);
-//       const $ = cheerio.load(html);
-
-//       const title = $("title").text();
-
-//       const metaTags = {};
-//       $("meta").each((_, el) => {
-//         const name = $(el).attr("name") || $(el).attr("property");
-//         const content = $(el).attr("content");
-//         if (name && content) {
-//           metaTags[name] = content;
-//         }
-//       });
-
-//       const links = [];
-//       $("a").each((_, el) => {
-//         const href = $(el).attr("href");
-//         if (href) {
-//           const resolvedUrl = new URL(href, currentUrl).href;
-
-//           // Exclude image URLs based on file extensions
-//           if (
-//             !/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i.test(resolvedUrl) &&
-//             isSameDomain(resolvedUrl, baseDomain)
-//           ) {
-//             links.push(resolvedUrl);
-//             uniqueLinks.add(resolvedUrl); // Add to unique links
-//             if (!visitedUrls.has(resolvedUrl)) {
-//               queue.push(resolvedUrl);
-//             }
-//           }
-//         }
-//       });
-
-//       const images = [];
-//       $("img").each((_, el) => {
-//         const src = $(el).attr("src");
-//         if (src) {
-//           const resolvedImage = new URL(src, currentUrl).href;
-//           images.push(resolvedImage);
-//           uniqueImages.add(resolvedImage); // Add to unique images
-//         }
-//       });
-
-//       const favicon = $('link[rel="icon"]').attr("href");
-//       const canonical = $('link[rel="canonical"]').attr("href");
-
-//       scrapedData.push({
-//         url: currentUrl,
-//         title,
-//         metaTags,
-//         links,
-//         images,
-//         favicon: favicon ? new URL(favicon, currentUrl).href : null,
-//         canonical,
-//       });
-//     } catch (error) {
-//       console.error(`Failed to scrape URL: ${currentUrl} - ${error.message}`);
-//     }
-//   }
-
-//   return scrapedData;
-// };
 
 // Utility function to check if the link is within the same domain
 const isSameDomain = (url, baseDomain) => {
   try {
     const targetDomain = new URL(url).hostname;
-    return targetDomain === baseDomain;
+    return targetDomain.endsWith(baseDomain); // Match subdomains
   } catch {
     return false;
   }
@@ -1060,15 +1003,15 @@ const isSameDomain = (url, baseDomain) => {
 //background work test
 // Add a job to the scrape queue
 app.post("/scrape", async (req, res) => {
-  const { url } = req.body;
+  const { url, websiteId } = req.body;
 
-  if (!url) {
-    return res.status(400).json({ error: "URL is required" });
+  if (!url || !websiteId) {
+    return res.status(400).json({ error: "URL and websiteId are required" });
   }
 
-  // Enqueue the scrape task
-  const job = await scrapeQueue.add({ url });
-
+  // Enqueue the scrape task with the provided websiteId
+  const job = await scrapeQueue.add({ url, websiteId });
+  console.log(url, websiteId);
   res.status(202).json({
     message: "Scraping task has been started.",
     jobId: job.id, // Return the job ID for tracking
@@ -1077,52 +1020,73 @@ app.post("/scrape", async (req, res) => {
 
 // Job processing
 scrapeQueue.process(async (job) => {
-  const { url } = job.data;
+  const { url, websiteId } = job.data;
   const baseDomain = new URL(url).hostname;
 
-  // Use job.id for websiteId and auditBy
-  const websiteId = job.id;
-  const auditBy = job.id;
+  const auditBy = job.id; // Use the job ID as an identifier for the audit
+
+  console.log(
+    `Before processing, job ${job.id} isCompleted: ${await job.isCompleted()}`
+  );
+
+  console.log(`Processing job for URL: ${url} with Website ID: ${websiteId}`);
 
   try {
-    console.log(`Processing job for URL: ${url}`);
+    let totalScraped = 0;
+    let totalUrls = 1; // Start with 1 to avoid division by zero
 
-    // Initialize tracking variables
-    let totalScraped = 0; // Track total number of pages scraped
-    let totalUrls = 0; // Track total number of URLs in the queue
+    // Function to update progress
 
-    // Start scraping and keep track of progress
+    // Function to update progress
+    const updateProgress = (scrapedData, queueSize) => {
+      // Debugging: Check the contents of scrapedData and queueSize
+
+      // Should be an array
+      console.log("Queue Size: ", queueSize);
+
+      const totalScraped = scrapedData.length;
+      const totalUrls = totalScraped + queueSize;
+
+      // Handle case where totalUrls is zero to avoid NaN
+      if (totalUrls === 0) totalUrls = 1;
+
+      const progress = Math.min(
+        ((totalScraped / totalUrls) * 100).toFixed(2),
+        100
+      );
+      console.log(`Total Scraped: ${totalScraped}, Total URLs: ${totalUrls}`);
+      job.progress(progress); // Update progress in the job
+      console.log(`Progress for Job ${job.id}: ${progress}%`);
+    };
+    // Perform the scraping and database saving
     const results = await scrapeAllPages(
       url,
       baseDomain,
       websiteId,
       auditBy,
-      (scrapedData, queueSize) => {
-        totalScraped = scrapedData.length;
-        totalUrls = queueSize;
-
-        // Update progress: calculate the percentage of scraping completed
-        job.progress(((totalScraped / totalUrls) * 100).toFixed(2));
-      }
+      updateProgress
     );
 
-    console.log("Scraping complete!");
+    console.log(
+      `Scraping and database operations for Job ${job.id} completed.`
+    );
 
-    // Finally, return the result when scraping is finished
+    // Return the results to store in Bull's job.returnvalue
     return {
-      uniqueLinks: Array.from(uniqueLinks),
-      uniqueImages: Array.from(uniqueImages),
-      pages: results,
+      uniqueLinks: results.uniqueLinks,
+      uniqueImages: results.uniqueImages,
+      pages: results.pages,
     };
   } catch (error) {
-    console.error("Scraping failed:", error.message);
-    throw new Error("Scraping failed");
+    console.error(`Job ${job.id} failed:`, error.message);
+    throw new Error("Scraping and saving data failed.");
   }
 });
 
 // Job completion listener
 scrapeQueue.on("completed", (job, result) => {
   console.log(`Job ${job.id} completed successfully.`);
+
   // Optionally, store or process the result
 });
 
@@ -1131,7 +1095,7 @@ scrapeQueue.on("failed", (job, err) => {
   console.error(`Job ${job.id} failed:`, err.message);
 });
 
-//job status route
+// Job status route
 app.get("/job-status/:jobId", async (req, res) => {
   const { jobId } = req.params;
 
@@ -1141,11 +1105,22 @@ app.get("/job-status/:jobId", async (req, res) => {
     if (!job) {
       return res.status(404).json({ error: "Job not found" });
     }
+    const progress = job.progress();
+    const returnValue = await job.returnvalue; // Await the returnvalue explicitly
+    const isCompleted = job.isCompleted() && returnValue != null; // Check if job is completed and result is valid
 
-    if (job.isCompleted()) {
-      return res.json({ status: "completed", result: await job.returnvalue });
+    if (isCompleted) {
+      return res.json({
+        status: "completed",
+        result: returnValue, // Return the result if it exists
+        progress: job.progress(),
+      });
     } else if (job.isFailed()) {
-      return res.json({ status: "failed", error: job.failedReason });
+      return res.json({
+        status: "in-progress", //failed
+        error: job.failedReason,
+        progress: job.progress(),
+      });
     } else {
       // Show progress while the job is in progress
       return res.json({
@@ -1161,78 +1136,88 @@ app.get("/job-status/:jobId", async (req, res) => {
 
 //save to db
 const saveAuditData = async (websiteId, auditBy, scrapedData) => {
-  db.serialize(() => {
-    // Insert into Site_Audits
-    db.run(
-      `INSERT INTO Site_Audits (website_id, audit_by, audit_status) VALUES (?, ?, ?)`,
-      [websiteId, auditBy, "Completed"],
-      function (err) {
-        if (err) {
-          console.error("Error inserting into Site_Audits:", err.message);
-          return;
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run(
+        `INSERT INTO Site_Audits (website_id, audit_by, audit_status) VALUES (?, ?, ?)`,
+        [websiteId, auditBy, "Completed"],
+        function (err) {
+          if (err) {
+            console.error("Error inserting into Site_Audits:", err.message);
+            return reject(err);
+          }
+
+          const auditId = this.lastID;
+
+          const insertPages = scrapedData.pages.map(
+            (page) =>
+              new Promise((resolve, reject) => {
+                db.run(
+                  `INSERT INTO Site_Audit_Pages (audit_id, url, crawl_status, linked_from, page_size, response_time_ms, found_in_crawl, meta_title, meta_description, meta_keywords) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [
+                    auditId,
+                    page.url,
+                    "Completed",
+                    page.linked_from || null,
+                    page.page_size || null,
+                    page.response_time_ms || null,
+                    true,
+                    page.title || null,
+                    page.metaTags?.Description || null,
+                    page.metaTags?.Keywords || null,
+                  ],
+                  (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                  }
+                );
+              })
+          );
+
+          const insertImages = scrapedData.uniqueImages.map(
+            (image) =>
+              new Promise((resolve, reject) => {
+                db.run(
+                  `INSERT INTO Site_Audit_Images (audit_id, image_url, crawl_status, linked_from, image_size, alt_text, file_name, response_time_ms) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [
+                    auditId,
+                    image,
+                    "Completed",
+                    image.linked_from || null,
+                    image.size || null,
+                    image.alt_text || null,
+                    image.file_name || null,
+                    image.response_time_ms || null,
+                  ],
+                  (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                  }
+                );
+              })
+          );
+
+          Promise.all([...insertPages, ...insertImages])
+            .then(() => resolve())
+            .catch((err) => reject(err));
         }
-
-        const auditId = this.lastID; // Get the inserted audit ID
-
-        // Insert into Site_Audit_Pages
-        scrapedData.pages.forEach((page) => {
-          db.run(
-            `INSERT INTO Site_Audit_Pages (audit_id, url, crawl_status, linked_from, page_size, response_time_ms, found_in_crawl, meta_title, meta_description, meta_keywords) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              auditId,
-              page.url,
-              "Completed",
-              page.linked_from || null,
-              page.page_size || null,
-              page.response_time_ms || null,
-              true, // found_in_crawl
-              page.title || null,
-              page.metaTags?.Description || null,
-              page.metaTags?.Keywords || null,
-            ],
-            (err) => {
-              if (err) {
-                console.error(
-                  "Error inserting into Site_Audit_Pages:",
-                  err.message
-                );
-              }
-            }
-          );
-        });
-
-        // Insert into Site_Audit_Images
-        scrapedData.uniqueImages.forEach((image) => {
-          db.run(
-            `INSERT INTO Site_Audit_Images (audit_id, image_url, crawl_status, linked_from, image_size, alt_text, file_name, response_time_ms) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              auditId,
-              image,
-              "Completed",
-              image.linked_from || null,
-              image.size || null,
-              image.alt_text || null,
-              image.file_name || null,
-              image.response_time_ms || null,
-            ],
-            (err) => {
-              if (err) {
-                console.error(
-                  "Error inserting into Site_Audit_Images:",
-                  err.message
-                );
-              }
-            }
-          );
-        });
-      }
-    );
+      );
+    });
   });
 };
 
+// Handle WebSocket connections
+// io.on("connection", (socket) => {
+//   console.log("A user connected");
+
+//   socket.on("disconnect", () => {
+//     console.log("A user disconnected");
+//   });
+// });
 // Start the server
+
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
