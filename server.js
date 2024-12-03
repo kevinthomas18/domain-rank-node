@@ -1208,6 +1208,76 @@ const saveAuditData = async (websiteId, auditBy, scrapedData) => {
   });
 };
 
+//Save Jobs API
+app.post("/scraping-jobs", async (req, res) => {
+  const { jobs } = req.body;
+  try {
+    // Save or update jobs in the database
+    await Promise.all(
+      jobs.map((job) =>
+        db.run(
+          `INSERT INTO scraping_jobs (id, url, website_id, status, progress, result) 
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET 
+             status = excluded.status, 
+             progress = excluded.progress, 
+             result = excluded.result`,
+          [
+            job.id,
+            job.url,
+            job.websiteId,
+            job.status,
+            job.progress,
+            JSON.stringify(job.result),
+          ]
+        )
+      )
+    );
+    res.status(200).json({ message: "Jobs saved successfully" });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to save jobs", error: error.message });
+  }
+});
+// Fetch Jobs API
+app.get("/scraping-jobs", async (req, res) => {
+  try {
+    db.all("SELECT * FROM scraping_jobs", [], (err, rows) => {
+      if (err) {
+        console.error("Database query error:", err.message);
+        return res
+          .status(500)
+          .json({ message: "Database query failed", error: err.message });
+      }
+      if (!rows.length) {
+        console.log("No jobs found.");
+        return res.status(200).json([]);
+      }
+
+      // Safely process results
+      const formattedJobs = rows.map((job) => {
+        let parsedResult = null;
+        try {
+          parsedResult = job.result ? JSON.parse(job.result) : null;
+        } catch (jsonError) {
+          console.error(
+            `Failed to parse result JSON for job ID ${job.id}:`,
+            jsonError.message
+          );
+        }
+        return { ...job, result: parsedResult };
+      });
+
+      res.status(200).json(formattedJobs);
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to fetch jobs", error: error.message });
+  }
+});
+
 // Handle WebSocket connections
 // io.on("connection", (socket) => {
 //   console.log("A user connected");
@@ -1217,6 +1287,11 @@ const saveAuditData = async (websiteId, auditBy, scrapedData) => {
 //   });
 // });
 // Start the server
+
+app.use((err, req, res, next) => {
+  console.error("Unhandled Error:", err.message);
+  res.status(500).json({ error: "Something went wrong!" });
+});
 
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);

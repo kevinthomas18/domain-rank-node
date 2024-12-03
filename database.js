@@ -183,6 +183,23 @@ const db = new sqlite3.Database("./database.db", (err) => {
       }
     );
 
+    //scraping_jobs
+    db.run(
+      `CREATE TABLE IF NOT EXISTS scraping_jobs (
+            id TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            website_id INTEGER NOT NULL,
+            status TEXT,
+            progress INTEGER,
+            result TEXT
+          )`,
+      (err) => {
+        if (err) {
+          console.error("Error creating scraping_jobs table:", err.message);
+        }
+      }
+    );
+
     // Function to fetch and log data from a table
     const showTableData = (tableName) => {
       db.all(`SELECT * FROM ${tableName}`, (err, rows) => {
@@ -198,6 +215,20 @@ const db = new sqlite3.Database("./database.db", (err) => {
       });
     };
 
+    const showTableDataPretty = (tableName) => {
+      db.all(`SELECT * FROM ${tableName}`, (err, rows) => {
+        if (err) {
+          console.error(
+            `Error retrieving data from ${tableName}:`,
+            err.message
+          );
+        } else {
+          console.log(`\nData from ${tableName}:`);
+          console.log(JSON.stringify(rows, null, 2)); // Pretty print with 2-space indentation
+        }
+      });
+    };
+
     // db.all(`PRAGMA table_info(Site_Audit_Images);`, (err, rows) => {
     //   if (err) {
     //     console.error("Error fetching table info:", err.message);
@@ -206,7 +237,15 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //   }
     // });
 
-    // showTableData("users");
+    // db.run("DELETE FROM scraping_jobs", (err) => {
+    //   if (err) {
+    //     console.error("Error deleting all records from scraping_jobs table:", err.message);
+    //   } else {
+    //     console.log("All records deleted from scraping_jobs table.");
+    //   }
+    // });
+
+    //showTableData("users");
     //showTableData("projects");
     //showTableData("keywords");
     //showTableData("websites");
@@ -214,7 +253,9 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //showTableData("rankhistory");
     //showTableData("Site_Audit_Pages");
     //showTableData("Site_Audit_Images");
-    //showTableData("Site_Audits");
+    //showTableDataPretty("Site_Audits");
+    //showTableDataPretty("users");
+    //showTableData("scraping_jobs");
   }
 });
 
