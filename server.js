@@ -45,6 +45,7 @@ app.use(
 
 // Middleware to parse JSON requests
 app.use(express.json());
+//app.use(express.json({ limit: "50mb" }));
 
 // Route to add a new user
 app.post("/register", async (req, res) => {
@@ -1293,6 +1294,11 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Something went wrong!" });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
-});
+// app.listen(PORT, () => {
+//   console.log(`Server is running on http://localhost:${PORT}`);
+// });
+
+const server = app.listen(PORT, () =>
+  console.log(`Server running on port ${PORT}`)
+);
+server.setTimeout(5 * 60 * 1000); // Set timeout to 5 minutes
