@@ -1056,7 +1056,7 @@ app.post("/scrape", async (req, res) => {
 
   // Enqueue the scrape task with the provided websiteId
   const job = await scrapeQueue.add({ url, websiteId });
-  console.log(url, websiteId);
+  //console.log(url, websiteId);
   res.status(202).json({
     message: "Scraping task has been started.",
     jobId: job.id, // Return the job ID for tracking
@@ -1070,11 +1070,11 @@ scrapeQueue.process(async (job) => {
 
   const auditBy = job.id; // Use the job ID as an identifier for the audit
 
-  console.log(
-    `Before processing, job ${job.id} isCompleted: ${await job.isCompleted()}`
-  );
+  // console.log(
+  //   `Before processing, job ${job.id} isCompleted: ${await job.isCompleted()}`
+  // );
 
-  console.log(`Processing job for URL: ${url} with Website ID: ${websiteId}`);
+  // console.log(`Processing job for URL: ${url} with Website ID: ${websiteId}`);
 
   try {
     let totalScraped = 0;
@@ -1087,7 +1087,7 @@ scrapeQueue.process(async (job) => {
       // Debugging: Check the contents of scrapedData and queueSize
 
       // Should be an array
-      console.log("Queue Size: ", queueSize);
+      //console.log("Queue Size: ", queueSize);
 
       const totalScraped = scrapedData.length;
       const totalUrls = totalScraped + queueSize;
