@@ -255,7 +255,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //showTableData("Site_Audit_Images");
     //showTableDataPretty("Site_Audits");
     //showTableDataPretty("users");
-    //showTableData("scraping_jobs");
+    //showTableDataPretty("scraping_jobs");
   }
 });
 

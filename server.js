@@ -984,11 +984,55 @@ const scrapeAllPages = async (
     pages: scrapedData,
   });
 
+  // Update job status to "completed"
+  try {
+    await updateJobStatus(auditBy, uniqueLinks, uniqueImages, scrapedData);
+  } catch (error) {
+    console.error("Failed to update job status:", error.message);
+  }
+
   return {
     uniqueLinks: Array.from(uniqueLinks),
     uniqueImages: Array.from(uniqueImages),
     pages: scrapedData,
   };
+};
+
+//update the row where id = auditBy
+const updateJobStatus = async (
+  auditBy,
+  uniqueLinks,
+  uniqueImages,
+  scrapedData
+) => {
+  const query = `
+    UPDATE scraping_jobs
+    SET 
+      status = $1,
+      progress = $2,
+      result = $3
+    WHERE id = $4;
+  `;
+
+  const resultData = {
+    uniqueLinks: Array.from(uniqueLinks),
+    uniqueImages: Array.from(uniqueImages),
+    pages: scrapedData,
+  };
+
+  const values = [
+    "completed", // Status
+    100, // Progress
+    JSON.stringify(resultData), // Result as a JSON string
+    auditBy, // ID to identify the row
+  ];
+
+  try {
+    const res = await db.run(query, values); // Replace `db.query` with your database client's query method
+    console.log(`Job status updated successfully for ID ${auditBy}`);
+  } catch (error) {
+    console.error("Failed to update job status:", error.message);
+  }
 };
 
 // Utility function to check if the link is within the same domain
@@ -1055,9 +1099,9 @@ scrapeQueue.process(async (job) => {
         ((totalScraped / totalUrls) * 100).toFixed(2),
         100
       );
-      console.log(`Total Scraped: ${totalScraped}, Total URLs: ${totalUrls}`);
+      //console.log(`Total Scraped: ${totalScraped}, Total URLs: ${totalUrls}`);
       job.progress(progress); // Update progress in the job
-      console.log(`Progress for Job ${job.id}: ${progress}%`);
+      //console.log(`Progress for Job ${job.id}: ${progress}%`);
     };
     // Perform the scraping and database saving
     const results = await scrapeAllPages(
@@ -1212,8 +1256,17 @@ const saveAuditData = async (websiteId, auditBy, scrapedData) => {
 //Save Jobs API
 app.post("/scraping-jobs", async (req, res) => {
   const { jobs } = req.body;
+
+  // Check for missing websiteId
+  const invalidJobs = jobs.filter((job) => !job.websiteId);
+  if (invalidJobs.length > 0) {
+    return res.status(400).json({
+      message: "Invalid job data: Missing websiteId",
+      invalidJobs,
+    });
+  }
+
   try {
-    // Save or update jobs in the database
     await Promise.all(
       jobs.map((job) =>
         db.run(
@@ -1226,7 +1279,7 @@ app.post("/scraping-jobs", async (req, res) => {
           [
             job.id,
             job.url,
-            job.websiteId,
+            job.websiteId, // Ensure this is not null
             job.status,
             job.progress,
             JSON.stringify(job.result),
@@ -1241,6 +1294,7 @@ app.post("/scraping-jobs", async (req, res) => {
       .json({ message: "Failed to save jobs", error: error.message });
   }
 });
+
 // Fetch Jobs API
 app.get("/scraping-jobs", async (req, res) => {
   try {
