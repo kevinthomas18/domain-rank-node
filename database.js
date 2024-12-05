@@ -258,7 +258,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //   }
     // });
 
-    // db.run("DELETE FROM Site_Audits", (err) => {
+    // db.run("DELETE FROM scraping_jobs ", (err) => {
     //   if (err) {
     //     console.error(
     //       "Error deleting all records from scraping_jobs table:",

@@ -52,7 +52,7 @@ app.use(express.json());
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: "kevinthomas0420@gmail.com",
+    user: "notifications-no-reply@spiderworks.info",
     pass: process.env.EMAIL_PASS,
   },
 });
@@ -131,7 +131,7 @@ app.post("/request-auth-otp", (req, res) => {
           // Send OTP email
           transporter.sendMail(
             {
-              from: "kevinthomas0420@gmail.com",
+              from: "notifications-no-reply@spiderworks.info",
               to: email,
               subject: "Your OTP for Login",
               text: `Your OTP is ${otp}. It will expire in 5 minutes.`,
