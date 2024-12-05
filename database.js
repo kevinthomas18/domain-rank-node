@@ -23,6 +23,27 @@ const db = new sqlite3.Database("./database.db", (err) => {
       }
     );
 
+    //new users table for otp based login
+    db.run(
+      `CREATE TABLE IF NOT EXISTS auth_users (
+        name TEXT NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE NOT NULL,
+        user_type TEXT CHECK(user_type IN ('manager', 'user')) NOT NULL DEFAULT 'user',
+        created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_by_id INTEGER,
+        status TEXT CHECK(status IN ('active', 'inactive')) NOT NULL DEFAULT 'active',
+        last_signin_date DATETIME,
+        otp TEXT,
+        otp_expiry DATETIME 
+       );`,
+      (err) => {
+        if (err) {
+          console.error("Error creating users table:", err.message);
+        }
+      }
+    );
+
     // Create projects table if it doesn't exist
     db.run(
       `CREATE TABLE IF NOT EXISTS projects (
@@ -249,6 +270,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
     // });
 
     //showTableData("users");
+    //showTableData("auth_users");
     //showTableData("projects");
     //showTableData("keywords");
     //showTableData("websites");

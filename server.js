@@ -4,7 +4,8 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
-
+const nodemailer = require("nodemailer");
+const crypto = require("crypto");
 const Queue = require("bull");
 //const scrapeQueue = new Queue("scrapeQueue");
 const scrapeQueue = new Queue("scrapeQueue", {
@@ -16,13 +17,13 @@ const scrapeQueue = new Queue("scrapeQueue", {
 });
 
 const redis = require("redis");
-const client = redis.createClient();
+//const client = redis.createClient();
 
 const jwt = require("jsonwebtoken");
 const db = require("./database");
 const app = express();
 const PORT = 4000;
-const SECRET_KEY = "your_secret_key";
+const SECRET_KEY = process.env.SECRET_KEY;
 
 // const http = require("http");
 // const { Server } = require("socket.io");
@@ -46,6 +47,154 @@ app.use(
 // Middleware to parse JSON requests
 app.use(express.json());
 //app.use(express.json({ limit: "50mb" }));
+
+// Configure the email transporter
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: "kevinthomas0420@gmail.com",
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+// Generate a secure OTP
+function generateOTP() {
+  return crypto.randomInt(100000, 999999).toString(); // Generates a 6-digit OTP
+}
+
+//Add a New User
+app.post("/add-auth-user", (req, res) => {
+  const { name, email, userType, createdById } = req.body;
+  console.log(name, email, userType, createdById);
+
+  if (!name || !email || !userType) {
+    return res
+      .status(400)
+      .json({ message: "Name, email, and user type are required" });
+  }
+
+  db.run(
+    `INSERT INTO auth_users (name, email, user_type, created_by_id) VALUES (?, ?, ?, ?)`,
+    [name, email, userType, createdById || null],
+    function (err) {
+      if (err) {
+        return res
+          .status(500)
+          .json({ message: "Failed to add user", error: err.message });
+      }
+      res
+        .status(200)
+        .json({ message: "User added successfully", userId: this.lastID });
+    }
+  );
+});
+
+//Request OTP
+app.post("/request-auth-otp", (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ message: "Email is required" });
+  }
+
+  // Check if the user exists and is active
+  db.get(
+    `SELECT * FROM auth_users WHERE email = ? AND status = 'active'`,
+    [email],
+    (err, user) => {
+      if (err) {
+        return res
+          .status(500)
+          .json({ message: "Database error", error: err.message });
+      }
+
+      if (!user) {
+        return res
+          .status(404)
+          .json({ message: "User not found or is not active" });
+      }
+
+      // Generate OTP and update the database
+      const otp = generateOTP();
+      const otpExpiry = new Date(Date.now() + 5 * 60 * 1000); // Valid for 5 minutes
+
+      db.run(
+        `UPDATE auth_users SET otp = ?, otp_expiry = ? WHERE email = ?`,
+        [otp, otpExpiry.toISOString(), email],
+        function (err) {
+          if (err) {
+            return res
+              .status(500)
+              .json({ message: "Failed to update OTP", error: err.message });
+          }
+
+          // Send OTP email
+          transporter.sendMail(
+            {
+              from: "kevinthomas0420@gmail.com",
+              to: email,
+              subject: "Your OTP for Login",
+              text: `Your OTP is ${otp}. It will expire in 5 minutes.`,
+            },
+            (err) => {
+              if (err) {
+                return res
+                  .status(500)
+                  .json({ message: "Failed to send OTP", error: err.message });
+              }
+              res.status(200).json({ message: "OTP sent successfully" });
+            }
+          );
+        }
+      );
+    }
+  );
+});
+
+//OTP Login Route
+app.post("/verify-otp", (req, res) => {
+  const { email, otp } = req.body;
+  console.log(email, otp, "email OTP");
+
+  if (!email || !otp) {
+    return res.status(400).json({ error: "Email and OTP are required" });
+  }
+
+  const query = `SELECT * FROM auth_users WHERE email = ? AND otp = ? AND otp_expiry > ?`;
+  db.get(query, [email, otp, new Date().toISOString()], (err, user) => {
+    if (err) {
+      return res
+        .status(500)
+        .json({ error: "Database error", message: err.message });
+    }
+    if (!user) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: user.id, email: user.email, name: user.name, role: user.role },
+      SECRET_KEY,
+      { expiresIn: "10h" }
+    );
+
+    // Clear OTP
+    db.run(`UPDATE auth_users SET otp = NULL, otp_expiry = NULL WHERE id = ?`, [
+      user.id,
+    ]);
+
+    res.status(200).json({
+      message: "Login successful",
+      data: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        token: token,
+      },
+    });
+  });
+});
 
 // Route to add a new user
 app.post("/register", async (req, res) => {
@@ -79,7 +228,7 @@ app.post("/login", (req, res) => {
       const token = jwt.sign(
         { id: user.id, email: user.email, name: user.name },
         SECRET_KEY,
-        { expiresIn: "4h" } // Token expiration
+        { expiresIn: "10h" } // Token expiration
       );
       res.json({
         message: "Login successful",
