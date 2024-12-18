@@ -145,13 +145,13 @@ const db = new sqlite3.Database("./database.db", (err) => {
 
     db.run(
       `CREATE TABLE IF NOT EXISTS Site_Audits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            website_id INTEGER NOT NULL,
-            audit_date_time TEXT DEFAULT CURRENT_TIMESTAMP,
-            audit_by INTEGER NOT NULL,
-            audit_status TEXT CHECK(audit_status IN ('Not started', 'In progress', 'Completed')) DEFAULT 'Not started',
-            FOREIGN KEY (website_id) REFERENCES websites(id)
-          )`,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      website_id INTEGER NOT NULL,
+      audit_date_time TEXT DEFAULT CURRENT_TIMESTAMP,
+      audit_by INTEGER NOT NULL,
+      audit_status TEXT CHECK(audit_status IN ('Not started', 'In progress', 'Completed')) DEFAULT 'Not started',
+      FOREIGN KEY (website_id) REFERENCES websites(id) ON DELETE CASCADE
+    )`,
       (err) => {
         if (err) {
           console.error("Error creating Site_Audits table:", err.message);
@@ -161,22 +161,22 @@ const db = new sqlite3.Database("./database.db", (err) => {
 
     db.run(
       `CREATE TABLE IF NOT EXISTS Site_Audit_Pages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            audit_id INTEGER NOT NULL,
-            crawl_status TEXT CHECK(crawl_status IN ('Not started', 'Completed')) DEFAULT 'Not started',
-            url TEXT NOT NULL,
-            linked_from TEXT,
-            page_size INTEGER,
-            response_time_ms INTEGER,
-            found_in_crawl BOOLEAN,
-            found_in_sitemap BOOLEAN,
-            found_in_analytics BOOLEAN,
-            found_in_search_console BOOLEAN,
-            meta_title TEXT,
-            meta_description TEXT,
-            meta_keywords TEXT,
-            FOREIGN KEY (audit_id) REFERENCES Site_Audits(id)
-          )`,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      audit_id INTEGER NOT NULL,
+      crawl_status TEXT CHECK(crawl_status IN ('Not started', 'Completed')) DEFAULT 'Not started',
+      url TEXT NOT NULL,
+      linked_from TEXT,
+      page_size INTEGER,
+      response_time_ms INTEGER,
+      found_in_crawl BOOLEAN,
+      found_in_sitemap BOOLEAN,
+      found_in_analytics BOOLEAN,
+      found_in_search_console BOOLEAN,
+      meta_title TEXT,
+      meta_description TEXT,
+      meta_keywords TEXT,
+      FOREIGN KEY (audit_id) REFERENCES Site_Audits(id) ON DELETE CASCADE
+    )`,
       (err) => {
         if (err) {
           console.error("Error creating Site_Audit_Pages table:", err.message);
@@ -186,17 +186,17 @@ const db = new sqlite3.Database("./database.db", (err) => {
 
     db.run(
       `CREATE TABLE IF NOT EXISTS Site_Audit_Images (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            audit_id INTEGER NOT NULL,
-            crawl_status TEXT CHECK(crawl_status IN ('Not started', 'Completed')) DEFAULT 'Not started',
-            image_url TEXT NOT NULL,
-            linked_from TEXT,
-            image_size INTEGER,
-            alt_text TEXT,
-            file_name TEXT,
-            response_time_ms INTEGER,
-            FOREIGN KEY (audit_id) REFERENCES Site_Audits(id)
-          )`,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      audit_id INTEGER NOT NULL,
+      crawl_status TEXT CHECK(crawl_status IN ('Not started', 'Completed')) DEFAULT 'Not started',
+      image_url TEXT NOT NULL,
+      linked_from TEXT,
+      image_size INTEGER,
+      alt_text TEXT,
+      file_name TEXT,
+      response_time_ms INTEGER,
+      FOREIGN KEY (audit_id) REFERENCES Site_Audits(id) ON DELETE CASCADE
+    )`,
       (err) => {
         if (err) {
           console.error("Error creating Site_Audit_Images table:", err.message);
@@ -207,13 +207,16 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //scraping_jobs
     db.run(
       `CREATE TABLE IF NOT EXISTS scraping_jobs (
-            id TEXT PRIMARY KEY,
-            url TEXT NOT NULL,
-            website_id INTEGER NOT NULL,
-            status TEXT,
-            progress INTEGER,
-            result TEXT
-          )`,
+        id TEXT PRIMARY KEY,
+        url TEXT NOT NULL,
+        website_id INTEGER NOT NULL,
+        status TEXT DEFAULT 'Not started',
+        progress INTEGER DEFAULT 0,
+        result TEXT,
+        errors TEXT,
+        job_id TEXT, -- Add job_id column
+        FOREIGN KEY (website_id) REFERENCES websites(id) ON DELETE CASCADE
+      )`,
       (err) => {
         if (err) {
           console.error("Error creating scraping_jobs table:", err.message);
@@ -258,7 +261,7 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //   }
     // });
 
-    // db.run("DELETE FROM scraping_jobs ", (err) => {
+    // db.run("DELETE FROM Site_Audits  ", (err) => {
     //   if (err) {
     //     console.error(
     //       "Error deleting all records from scraping_jobs table:",
@@ -276,11 +279,10 @@ const db = new sqlite3.Database("./database.db", (err) => {
     //showTableData("websites");
     //showTableData("Keyword_Website_mapping");
     //showTableData("rankhistory");
-    //showTableData("Site_Audit_Pages");
+    //showTableDataPretty("Site_Audit_Pages");
     //showTableData("Site_Audit_Images");
     //showTableDataPretty("Site_Audits");
-    //showTableDataPretty("users");
-    //showTableDataPretty("scraping_jobs");
+    //showTableData("scraping_jobs");
   }
 });
 

@@ -19,6 +19,8 @@ const scrapeQueue = new Queue("scrapeQueue", {
 const redis = require("redis");
 //const client = redis.createClient();
 
+const { imageSize } = require("image-size");
+
 const jwt = require("jsonwebtoken");
 const db = require("./database");
 const app = express();
@@ -39,14 +41,14 @@ const SECRET_KEY = process.env.SECRET_KEY;
 app.use(
   cors({
     origin: ["http://localhost:3000", "https://domain-rank-client.vercel.app"],
-    methods: "GET,POST,PUT,DELETE",
+    methods: "GET,POST,PUT,PATCH,DELETE",
     credentials: true,
   })
 );
 
 // Middleware to parse JSON requests
-app.use(express.json());
-//app.use(express.json({ limit: "50mb" }));
+//app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 // Configure the email transporter
 const transporter = nodemailer.createTransport({
@@ -59,13 +61,12 @@ const transporter = nodemailer.createTransport({
 
 // Generate a secure OTP
 function generateOTP() {
-  return crypto.randomInt(100000, 999999).toString(); // Generates a 6-digit OTP
+  return crypto.randomInt(100000, 999999).toString();
 }
 
 //Add a New User
 app.post("/add-auth-user", (req, res) => {
   const { name, email, userType, createdById } = req.body;
-  console.log(name, email, userType, createdById);
 
   if (!name || !email || !userType) {
     return res
@@ -154,7 +155,6 @@ app.post("/request-auth-otp", (req, res) => {
 //OTP Login Route
 app.post("/verify-otp", (req, res) => {
   const { email, otp } = req.body;
-  console.log(email, otp, "email OTP");
 
   if (!email || !otp) {
     return res.status(400).json({ error: "Email and OTP are required" });
@@ -175,7 +175,7 @@ app.post("/verify-otp", (req, res) => {
     const token = jwt.sign(
       { id: user.id, email: user.email, name: user.name, role: user.role },
       SECRET_KEY,
-      { expiresIn: "10h" }
+      { expiresIn: "24h" }
     );
 
     // Clear OTP
@@ -228,7 +228,7 @@ app.post("/login", (req, res) => {
       const token = jwt.sign(
         { id: user.id, email: user.email, name: user.name },
         SECRET_KEY,
-        { expiresIn: "10h" } // Token expiration
+        { expiresIn: "24h" } // Token expiration
       );
       res.json({
         message: "Login successful",
@@ -1033,23 +1033,56 @@ app.get("/scrape", async (req, res) => {
   }
 });
 
-//test save to db function
+//scrape all the pages
 const scrapeAllPages = async (
   startUrl,
   baseDomain,
   websiteId,
-  auditBy,
+  auditBy, // Used as jobId
   progressCallback
 ) => {
-  const queue = [startUrl];
+  const queue = [{ url: startUrl, parent: null }]; // Include parent URL
   const scrapedData = [];
   const visitedUrls = new Set();
+  const uniqueImageUrls = new Set(); // Tracks unique image URLs
+  const uniqueImages = []; // Store unique images with metadata
+  const errorLogs = []; // To store errors
 
-  const uniqueLinks = new Set(); // Local reset of uniqueLinks
-  const uniqueImages = new Set();
+  // Helper function to fetch image dimensions
+  const getImageSize = async (imageUrl) => {
+    try {
+      const response = await axios.get(imageUrl, {
+        responseType: "arraybuffer",
+      });
+
+      const sizeInBytes = response.data.length; // Get size in bytes
+      const sizeInKB = (sizeInBytes / 1024).toFixed(2); // Convert to KB with 2 decimal places
+      const sizeInMB = (sizeInKB / 1024).toFixed(2); // Convert to MB with 2 decimal places
+
+      const dimensions = imageSize(response.data); // Use the image-size package
+      return {
+        width: dimensions.width,
+        height: dimensions.height,
+        sizeInBytes,
+        sizeInKB,
+        sizeInMB,
+      };
+    } catch (err) {
+      console.error(
+        `Error fetching image size for ${imageUrl}: ${err.message}`
+      );
+      return {
+        width: null,
+        height: null,
+        sizeInBytes: null,
+        sizeInKB: null,
+        sizeInMB: null,
+      };
+    }
+  };
 
   while (queue.length > 0) {
-    const currentUrl = queue.shift();
+    const { url: currentUrl, parent: parentUrl } = queue.shift();
 
     if (visitedUrls.has(currentUrl)) continue;
     visitedUrls.add(currentUrl);
@@ -1070,39 +1103,46 @@ const scrapeAllPages = async (
       $("a").each((_, el) => {
         const href = $(el).attr("href");
         if (href) {
+          if (href.includes("#") || href.trim() === "") {
+            return; // Skip this link
+          }
           const resolvedUrl = new URL(href, currentUrl).href;
 
-          const imageExtensions = [
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".webp",
-            ".svg",
-          ];
-          const isImageLink = imageExtensions.some((ext) =>
-            resolvedUrl.toLowerCase().endsWith(ext)
-          );
-
           if (
-            !isImageLink &&
             !visitedUrls.has(resolvedUrl) &&
             isSameDomain(resolvedUrl, baseDomain)
           ) {
             links.push(resolvedUrl);
-            uniqueLinks.add(resolvedUrl);
-            queue.push(resolvedUrl);
+            queue.push({ url: resolvedUrl, parent: currentUrl }); // Track parent URL
           }
         }
       });
 
       const images = [];
-      $("img").each((_, el) => {
+      $("img").each(async (_, el) => {
         const src = $(el).attr("src");
+        const alt = $(el).attr("alt") || ""; // Get alt text
         if (src) {
           const resolvedImage = new URL(src, currentUrl).href;
-          images.push(resolvedImage);
-          uniqueImages.add(resolvedImage);
+
+          // Only add unique images
+          if (!uniqueImageUrls.has(resolvedImage)) {
+            uniqueImageUrls.add(resolvedImage);
+
+            const size = await getImageSize(resolvedImage);
+            const imageData = {
+              url: resolvedImage,
+              altText: alt,
+              width: size.width,
+              height: size.height,
+              sizeInBytes: size.sizeInBytes,
+              sizeInKB: size.sizeInKB,
+              sizeInMB: size.sizeInMB,
+            };
+
+            uniqueImages.push(imageData); // Add to uniqueImages array
+            images.push(imageData); // Add to current page's images
+          }
         }
       });
 
@@ -1111,6 +1151,7 @@ const scrapeAllPages = async (
 
       scrapedData.push({
         url: currentUrl,
+        parentUrl,
         title,
         metaTags,
         links,
@@ -1124,61 +1165,100 @@ const scrapeAllPages = async (
       }
     } catch (error) {
       console.error(`Failed to scrape ${currentUrl}: ${error.message}`);
+      errorLogs.push({ url: currentUrl, parentUrl, error: error.message }); // Log errors
     }
   }
 
   await saveAuditData(websiteId, auditBy, {
-    uniqueLinks: Array.from(uniqueLinks),
-    uniqueImages: Array.from(uniqueImages),
+    uniqueLinks: Array.from(visitedUrls),
+    uniqueImages,
     pages: scrapedData,
+    errors: errorLogs, // Include errors in saved data
   });
 
-  // Update job status to "completed"
   try {
-    await updateJobStatus(auditBy, uniqueLinks, uniqueImages, scrapedData);
+    await updateJobStatus(
+      websiteId,
+      visitedUrls,
+      uniqueImages,
+      scrapedData,
+      auditBy,
+      errorLogs // Pass error logs
+    );
   } catch (error) {
     console.error("Failed to update job status:", error.message);
   }
 
   return {
-    uniqueLinks: Array.from(uniqueLinks),
-    uniqueImages: Array.from(uniqueImages),
+    uniqueLinks: Array.from(visitedUrls),
+    uniqueImages,
     pages: scrapedData,
+    errors: errorLogs,
   };
 };
 
 //update the row where id = auditBy
 const updateJobStatus = async (
-  auditBy,
+  websiteId,
   uniqueLinks,
   uniqueImages,
-  scrapedData
+  scrapedData,
+  jobId,
+  errorLogs // Add error logs
 ) => {
   const query = `
     UPDATE scraping_jobs
-    SET 
-      status = $1,
-      progress = $2,
-      result = $3
-    WHERE id = $4;
+    SET
+      status = $2,
+      progress = $3,
+      result = $4,
+      errors = $5, -- Update the errors field
+      url = $6
+    WHERE job_id = $1;
   `;
 
   const resultData = {
     uniqueLinks: Array.from(uniqueLinks),
     uniqueImages: Array.from(uniqueImages),
-    pages: scrapedData,
+    pages: scrapedData.map((page) => ({
+      url: page.url,
+      parentUrl: page.parentUrl, // Include parent URL
+      title: page.title,
+      metaTags: page.metaTags,
+      links: page.links,
+      images: page.images,
+      favicon: page.favicon,
+      canonical: page.canonical,
+    })),
   };
 
   const values = [
-    "completed", // Status
-    100, // Progress
-    JSON.stringify(resultData), // Result as a JSON string
-    auditBy, // ID to identify the row
+    jobId,
+    "completed",
+    100,
+    JSON.stringify(resultData),
+    JSON.stringify(errorLogs), // Save error logs as JSON
+    scrapedData[0] ? scrapedData[0].url : null, // Use the first scraped URL as representative
   ];
 
   try {
-    const res = await db.run(query, values); // Replace `db.query` with your database client's query method
-    console.log(`Job status updated successfully for ID ${auditBy}`);
+    const res = await new Promise((resolve, reject) => {
+      db.run(query, values, function (err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(this.changes);
+        }
+      });
+    });
+
+    if (res > 0) {
+      console.log(
+        `Job updated successfully for websiteId ${websiteId} with jobId ${jobId}`
+      );
+    } else {
+      console.log(`No job found with jobId ${jobId}.`);
+    }
   } catch (error) {
     console.error("Failed to update job status:", error.message);
   }
@@ -1270,6 +1350,7 @@ scrapeQueue.process(async (job) => {
       uniqueLinks: results.uniqueLinks,
       uniqueImages: results.uniqueImages,
       pages: results.pages,
+      errors: results.errors,
     };
   } catch (error) {
     console.error(`Job ${job.id} failed:`, error.message);
@@ -1454,28 +1535,38 @@ app.get("/scraping-jobs", async (req, res) => {
           .status(500)
           .json({ message: "Database query failed", error: err.message });
       }
+
       if (!rows.length) {
         console.log("No jobs found.");
-        return res.status(200).json([]);
+        return res.status(200).json([]); // Return an empty array if no jobs exist
       }
 
-      // Safely process results
+      // Safely process each row and attempt to parse the `result` field
       const formattedJobs = rows.map((job) => {
-        let parsedResult = null;
+        let parsedResult = job.result;
+
         try {
-          parsedResult = job.result ? JSON.parse(job.result) : null;
+          if (
+            job.result &&
+            job.result.startsWith("{") &&
+            job.result.endsWith("}")
+          ) {
+            parsedResult = JSON.parse(job.result);
+          }
         } catch (jsonError) {
           console.error(
             `Failed to parse result JSON for job ID ${job.id}:`,
             jsonError.message
           );
         }
-        return { ...job, result: parsedResult };
+
+        return { ...job, result: parsedResult }; // Include the parsed or raw result
       });
 
-      res.status(200).json(formattedJobs);
+      res.status(200).json(formattedJobs); // Send the formatted jobs as the response
     });
   } catch (error) {
+    console.error("Unexpected server error:", error.message);
     res
       .status(500)
       .json({ message: "Failed to fetch jobs", error: error.message });
@@ -1490,11 +1581,84 @@ app.get("/scraping-jobs", async (req, res) => {
 //     console.log("A user disconnected");
 //   });
 // });
-// Start the server
+
+// Route to get rank and date by keyword_id and website_id
+app.get("/results/:jobId", (req, res) => {
+  const { jobId } = req.params;
+
+  const query = `
+    SELECT *
+    FROM scraping_jobs 
+    WHERE id = ? 
+  `;
+
+  db.get(query, [jobId.toString()], (err, row) => {
+    if (err) {
+      console.error("Error fetching data:", err.message);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+
+    if (!row) {
+      return res.status(404).json({
+        message: "No record found for the given jobId.",
+      });
+    }
+
+    // Try to parse the result if it looks like JSON, otherwise leave as is
+    let parsedResult = row.result;
+    try {
+      if (
+        row.result &&
+        row.result.startsWith("{") &&
+        row.result.endsWith("}")
+      ) {
+        parsedResult = JSON.parse(row.result);
+      }
+    } catch (jsonError) {
+      console.error(
+        `Failed to parse result JSON for job ID ${jobId}:`,
+        jsonError.message
+      );
+    }
+
+    res.json({
+      ...row,
+      result: parsedResult, // Return parsed or raw result
+    });
+  });
+});
 
 app.use((err, req, res, next) => {
   console.error("Unhandled Error:", err.message);
   res.status(500).json({ error: "Something went wrong!" });
+});
+
+// Endpoint to update scraping job by jobId
+app.patch("/update-scraping-job", (req, res) => {
+  let { jobId, result } = req.body;
+
+  jobId = String(jobId);
+
+  // Update the job status, progress, and result in the scraping_jobs table
+  const query = `
+    UPDATE scraping_jobs
+    SET status = 'completed',
+        progress = 100,
+        result = ? 
+    WHERE id = ?`;
+
+  db.run(query, [result, jobId], function (err) {
+    if (err) {
+      console.error(err.message);
+      return res.status(500).json({ message: "Failed to update job" });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    res.status(200).json({ message: "Job updated successfully" });
+  });
 });
 
 // app.listen(PORT, () => {
