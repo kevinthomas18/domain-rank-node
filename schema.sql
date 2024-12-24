@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS scraping_jobs (
     url TEXT NOT NULL,
     website_id INTEGER NOT NULL,
     status TEXT DEFAULT 'Not started',
-    progress INTEGER DEFAULT 0,
+    progress NUMERIC DEFAULT 0,
     result TEXT,
     errors TEXT,
     job_id TEXT,
