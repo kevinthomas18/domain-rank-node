@@ -22,10 +22,14 @@ const redis = require("redis");
 const { imageSize } = require("image-size");
 
 const jwt = require("jsonwebtoken");
-const db = require("./database");
+//const db = require("./database");
 const app = express();
 const PORT = 4000;
 const SECRET_KEY = process.env.SECRET_KEY;
+
+const pool = require("./config/db");
+//const fs = require("fs");
+
 
 // const http = require("http");
 // const { Server } = require("socket.io");
@@ -37,6 +41,28 @@ const SECRET_KEY = process.env.SECRET_KEY;
 //     methods: ["GET", "POST"],
 //   },
 // });
+
+// const schemaSQL = fs.readFileSync("schema.sql", "utf8");
+
+// pool.query(schemaSQL, (err, res) => {
+//   if (err) {
+//     console.error("Error creating tables:", err.stack);
+//   } else {
+//     console.log("Tables created successfully");
+//   }
+//   pool.end();
+// });
+
+// const getUsers = async () => {
+//   try {
+//     const res = await pool.query("SELECT * FROM auth_users");
+//     console.log(res.rows); // Logs the query result
+//   } catch (err) {
+//     console.error("Error executing query", err.stack);
+//   }
+// };
+
+// getUsers();
 
 app.use(
   cors({
@@ -65,7 +91,7 @@ function generateOTP() {
 }
 
 //Add a New User
-app.post("/add-auth-user", (req, res) => {
+app.post("/add-auth-user", async (req, res) => {
   const { name, email, userType, createdById } = req.body;
 
   if (!name || !email || !userType) {
@@ -74,114 +100,121 @@ app.post("/add-auth-user", (req, res) => {
       .json({ message: "Name, email, and user type are required" });
   }
 
-  db.run(
-    `INSERT INTO auth_users (name, email, user_type, created_by_id) VALUES (?, ?, ?, ?)`,
-    [name, email, userType, createdById || null],
-    function (err) {
-      if (err) {
-        return res
-          .status(500)
-          .json({ message: "Failed to add user", error: err.message });
-      }
-      res
-        .status(200)
-        .json({ message: "User added successfully", userId: this.lastID });
-    }
-  );
+  try {
+    const insertQuery = `
+      INSERT INTO auth_users (name, email, user_type, created_by_id) 
+      VALUES ($1, $2, $3, $4) 
+      RETURNING id
+    `;
+    const result = await pool.query(insertQuery, [
+      name,
+      email,
+      userType,
+      createdById || null,
+    ]);
+
+    const userId = result.rows[0].id;
+    res.status(200).json({ message: "User added successfully", userId });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to add user", error: error.message });
+  }
 });
 
 //Request OTP
-app.post("/request-auth-otp", (req, res) => {
+app.post("/request-auth-otp", async (req, res) => {
   const { email } = req.body;
 
   if (!email) {
     return res.status(400).json({ message: "Email is required" });
   }
 
-  // Check if the user exists and is active
-  db.get(
-    `SELECT * FROM auth_users WHERE email = ? AND status = 'active'`,
-    [email],
-    (err, user) => {
-      if (err) {
-        return res
-          .status(500)
-          .json({ message: "Database error", error: err.message });
-      }
+  try {
+    // Check if the user exists and is active
+    const userQuery = `
+      SELECT * FROM auth_users 
+      WHERE email = $1 AND status = 'active'
+    `;
+    const userResult = await pool.query(userQuery, [email]);
 
-      if (!user) {
-        return res
-          .status(404)
-          .json({ message: "User not found or is not active" });
-      }
-
-      // Generate OTP and update the database
-      const otp = generateOTP();
-      const otpExpiry = new Date(Date.now() + 5 * 60 * 1000); // Valid for 5 minutes
-
-      db.run(
-        `UPDATE auth_users SET otp = ?, otp_expiry = ? WHERE email = ?`,
-        [otp, otpExpiry.toISOString(), email],
-        function (err) {
-          if (err) {
-            return res
-              .status(500)
-              .json({ message: "Failed to update OTP", error: err.message });
-          }
-
-          // Send OTP email
-          transporter.sendMail(
-            {
-              from: "notifications-no-reply@spiderworks.info",
-              to: email,
-              subject: "Your OTP for Login",
-              text: `Your OTP is ${otp}. It will expire in 5 minutes.`,
-            },
-            (err) => {
-              if (err) {
-                return res
-                  .status(500)
-                  .json({ message: "Failed to send OTP", error: err.message });
-              }
-              res.status(200).json({ message: "OTP sent successfully" });
-            }
-          );
-        }
-      );
+    if (userResult.rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "User not found or is not active" });
     }
-  );
+
+    // Generate OTP and update the database
+    const otp = generateOTP();
+    const otpExpiry = new Date(Date.now() + 5 * 60 * 1000); // Valid for 5 minutes
+
+    const updateOtpQuery = `
+      UPDATE auth_users 
+      SET otp = $1, otp_expiry = $2 
+      WHERE email = $3
+    `;
+    await pool.query(updateOtpQuery, [otp, otpExpiry.toISOString(), email]);
+
+    // Send OTP email
+    transporter.sendMail(
+      {
+        from: "notifications-no-reply@spiderworks.info",
+        to: email,
+        subject: "Your OTP for Login",
+        text: `Your OTP is ${otp}. It will expire in 5 minutes.`,
+      },
+      (err) => {
+        if (err) {
+          return res
+            .status(500)
+            .json({ message: "Failed to send OTP", error: err.message });
+        }
+        res.status(200).json({ message: "OTP sent successfully" });
+      }
+    );
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Internal server error", error: error.message });
+  }
 });
 
 //OTP Login Route
-app.post("/verify-otp", (req, res) => {
+app.post("/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
 
   if (!email || !otp) {
     return res.status(400).json({ error: "Email and OTP are required" });
   }
 
-  const query = `SELECT * FROM auth_users WHERE email = ? AND otp = ? AND otp_expiry > ?`;
-  db.get(query, [email, otp, new Date().toISOString()], (err, user) => {
-    if (err) {
-      return res
-        .status(500)
-        .json({ error: "Database error", message: err.message });
-    }
-    if (!user) {
+  try {
+    const query = `
+      SELECT * FROM auth_users WHERE email = $1 AND otp = $2 AND otp_expiry > $3
+    `;
+    const result = await pool.query(query, [
+      email,
+      otp,
+      new Date().toISOString(),
+    ]);
+
+    if (result.rows.length === 0) {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
+    const user = result.rows[0];
+
     // Generate JWT token
     const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name, role: user.role },
+      { id: user.id, email: user.email, name: user.name, role: user.user_type },
       SECRET_KEY,
       { expiresIn: "24h" }
     );
 
-    // Clear OTP
-    db.run(`UPDATE auth_users SET otp = NULL, otp_expiry = NULL WHERE id = ?`, [
-      user.id,
-    ]);
+    // Clear OTP from the database
+    const clearOtpQuery = `
+      UPDATE auth_users SET otp = NULL, otp_expiry = NULL WHERE id = $1
+    `;
+    await pool.query(clearOtpQuery, [user.id]);
 
     res.status(200).json({
       message: "Login successful",
@@ -189,74 +222,41 @@ app.post("/verify-otp", (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role,
+        role: user.user_type,
         token: token,
       },
     });
-  });
-});
-
-// Route to add a new user
-app.post("/register", async (req, res) => {
-  const { name, email, password } = req.body;
-
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const query = `INSERT INTO users (name, email, password) VALUES (?, ?, ?)`;
-    db.run(query, [name, email, hashedPassword], function (err) {
-      if (err) {
-        return res.status(400).json({ error: err.message });
-      }
-      res.json({ id: this.lastID, name, email });
-    });
   } catch (error) {
-    res.status(500).json({ error: "Failed to register user" });
+    res.status(500).json({ error: "Database error", message: error.message });
   }
 });
 
-// Route to login user (email & password check with hashing)
-app.post("/login", (req, res) => {
-  const { email, password } = req.body;
-  const query = `SELECT * FROM users WHERE email = ?`;
-
-  db.get(query, [email], async (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (user && (await bcrypt.compare(password, user.password))) {
-      // Generate JWT token
-      const token = jwt.sign(
-        { id: user.id, email: user.email, name: user.name },
-        SECRET_KEY,
-        { expiresIn: "24h" } // Token expiration
-      );
-      res.json({
-        message: "Login successful",
-        data: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          token: token,
-        },
-      });
-    } else {
-      res.status(400).json({ error: "Invalid email or password" });
-    }
-  });
-});
 // Example route to get user info (protected with JWT)
-app.get("/profile", (req, res) => {
+app.get("/profile", async (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
+
   if (!token) {
     return res.status(401).json({ error: "Access denied" });
   }
 
   try {
+    // Verify the token and decode it
     const decoded = jwt.verify(token, SECRET_KEY);
-    res.json({ message: "Protected data", user: decoded });
+
+    // Fetch the user details from the database
+    const query =
+      "SELECT id, name, email, user_type FROM auth_users WHERE id = $1";
+    const result = await pool.query(query, [decoded.id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Return the user's profile data
+    const user = result.rows[0];
+    res.json({ message: "Protected data", user });
   } catch (error) {
-    res.status(401).json({ error: "Invalid token" });
+    res.status(401).json({ error: "Invalid or expired token" });
   }
 });
 
@@ -280,111 +280,124 @@ const verifyToken = (req, res, next) => {
 // --- Project Routes ---
 
 // Route to add a new project (with user info from JWT)
-app.post("/projects", verifyToken, (req, res) => {
+app.post("/projects", verifyToken, async (req, res) => {
   const { name, domain_name, status = "Active" } = req.body;
   const { id: created_by } = req.user; // Get user ID from the decoded JWT (stored in req.user)
 
+  // Parameterized query to insert the project into the database
   const query = `
-      INSERT INTO projects (name, domain_name, created_by, status) 
-      VALUES (?, ?, ?, ?)
-    `;
+    INSERT INTO projects (name, domain_name, created_by, status) 
+    VALUES ($1, $2, $3, $4) RETURNING id, name, domain_name, created_by, status
+  `;
 
-  db.run(query, [name, domain_name, created_by, status], function (err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
+  try {
+    const result = await pool.query(query, [
+      name,
+      domain_name,
+      created_by,
+      status,
+    ]);
+
+    const project = result.rows[0]; // Get the newly inserted project details
+
     res.json({
       message: "Project created successfully",
-      project: {
-        id: this.lastID,
-        name,
-        domain_name,
-        created_by,
-        status,
-      },
+      project,
     });
-  });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // Route to get all projects
-app.get("/projects", verifyToken, (req, res) => {
+app.get("/projects", verifyToken, async (req, res) => {
   const query = `SELECT * FROM projects`;
 
-  db.all(query, [], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json(rows);
-  });
+  try {
+    const result = await pool.query(query);
+    res.json(result.rows); // Send back the rows from the database
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Route to get a specific project by ID
-app.get("/projects/:id", verifyToken, (req, res) => {
+app.get("/projects/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
-  const query = `SELECT * FROM projects WHERE id = ?`;
+  const query = `SELECT * FROM projects WHERE id = $1`;
 
-  db.get(query, [id], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!row) {
+  try {
+    const result = await pool.query(query, [id]);
+    const project = result.rows[0]; // Get the first row (there should be only one project)
+
+    if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
-    res.json(row);
-  });
-});
 
+    res.json(project);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+    
 // Route to edit an existing project
-app.put("/projects/:id", verifyToken, (req, res) => {
+app.put("/projects/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
   const { name, domain_name, status } = req.body;
   const { id: updated_by } = req.user;
 
-  //console.log("Incoming request body:", req.body);
-
+  // SQL query to update project
   const query = `
     UPDATE projects 
-    SET name = ?, domain_name = ?, status = ?, updated_by = ?, last_used_date = CURRENT_TIMESTAMP
-    WHERE id = ?;
+    SET name = $1, domain_name = $2, status = $3, updated_by = $4, last_used_date = CURRENT_TIMESTAMP
+    WHERE id = $5
+    RETURNING id, name, domain_name, status, updated_by, last_used_date;
   `;
 
-  db.run(query, [name, domain_name, status, updated_by, id], function (err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
+  try {
+    const result = await pool.query(query, [
+      name,
+      domain_name,
+      status,
+      updated_by,
+      id,
+    ]);
 
-    if (this.changes === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: "Project not found" });
     }
 
+    const updatedProject = result.rows[0]; // Get the updated project
     res.json({
       message: "Project updated successfully",
-      project: {
-        id,
-        name,
-        domain_name,
-        status,
-        updated_by,
-      },
+      project: updatedProject,
     });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Route to delete a project
-app.delete("/projects/:id", verifyToken, (req, res) => {
+app.delete("/projects/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
-  const query = `DELETE FROM projects WHERE id = ?`;
 
-  db.run(query, [id], function (err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
+  const query = `DELETE FROM projects WHERE id = $1 RETURNING id`;
+
+  try {
+    const result = await pool.query(query, [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Project not found" });
     }
+
     res.json({ message: "Project deleted successfully" });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Route to add a new keyword
-app.post("/keywords", verifyToken, (req, res) => {
+app.post("/keywords", verifyToken, async (req, res) => {
   const {
     project_id,
     keyword,
@@ -396,67 +409,63 @@ app.post("/keywords", verifyToken, (req, res) => {
   const { id: created_by } = req.user;
 
   const query = `
-    INSERT INTO keywords (
-      project_id, keyword, search_engine, search_location, created_by, status
-    ) 
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO keywords (project_id, keyword, search_engine, search_location, created_by, status)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, project_id, keyword, search_engine, search_location, created_by, status, created_date
   `;
 
-  db.run(
-    query,
-    [project_id, keyword, search_engine, search_location, created_by, status],
-    function (err) {
-      if (err) {
-        return res
-          .status(400)
-          .json({ error: "Database error: " + err.message });
-      }
+  try {
+    const result = await pool.query(query, [
+      project_id,
+      keyword,
+      search_engine,
+      search_location,
+      created_by,
+      status,
+    ]);
 
-      res.json({
-        message: "Keyword created successfully",
-        keyword: {
-          id: this.lastID,
-          project_id,
-          keyword,
-          search_engine,
-          search_location,
-          created_by,
-          status,
-          created_date: new Date().toISOString(),
-        },
-      });
-    }
-  );
+    const keywordData = result.rows[0]; // Since we're using RETURNING, result.rows contains the inserted data
+
+    res.json({
+      message: "Keyword created successfully",
+      keyword: {
+        ...keywordData,
+        created_date: new Date().toISOString(), // Add the created date manually if it's not in the database
+      },
+    });
+  } catch (err) {
+    res.status(400).json({ error: "Database error: " + err.message });
+  }
 });
 
 // Route to get all keywords for a specific project
-app.get("/keywords/:project_id", verifyToken, (req, res) => {
+app.get("/keywords/:project_id", verifyToken, async (req, res) => {
   const { project_id } = req.params;
 
   const query = `
-      SELECT * FROM keywords WHERE project_id = ?
-    `;
+    SELECT * FROM keywords WHERE project_id = $1
+  `;
 
-  db.all(query, [project_id], (err, rows) => {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
+  try {
+    const result = await pool.query(query, [project_id]);
 
-    if (rows.length === 0) {
+    if (result.rows.length === 0) {
       return res
         .status(404)
         .json({ message: "No keywords found for this project." });
     }
 
     res.json({
-      message: "Keywords retrieved successfully ",
-      keywords: rows,
+      message: "Keywords retrieved successfully",
+      keywords: result.rows,
     });
-  });
+  } catch (err) {
+    res.status(400).json({ error: "Database error: " + err.message });
+  }
 });
 
 //updating  the latest_manual_check_rank
-app.put("/keywords/:id", verifyToken, (req, res) => {
+app.put("/keywords/:id", verifyToken, async (req, res) => {
   const { id: keyword_id } = req.params;
   const { website_id, latest_manual_check_rank } = req.body;
 
@@ -475,385 +484,265 @@ app.put("/keywords/:id", verifyToken, (req, res) => {
       .json({ message: "website_id must be a valid integer." });
   }
 
-  // Query to check if the mapping already exists
-  const checkQuery = `
-    SELECT id FROM Keyword_Website_mapping 
-    WHERE keyword_id = ? AND website_id = ?
-  `;
+  try {
+    // Query to check if the mapping already exists
+    const checkQuery = `
+      SELECT id FROM Keyword_Website_mapping
+      WHERE keyword_id = $1 AND website_id = $2
+    `;
+    const { rows } = await pool.query(checkQuery, [keyword_id, website_id]);
 
-  db.get(checkQuery, [keyword_id, website_id], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: "Database error: " + err.message });
-    }
-
-    if (row) {
-      // If row exists, update the entry
+    if (rows.length > 0) {
+      // If the mapping exists, update the entry
       const updateQuery = `
-        UPDATE Keyword_Website_mapping 
-        SET latest_manual_check_rank = ?, last_check_date = CURRENT_TIMESTAMP
-        WHERE keyword_id = ? AND website_id = ?
+        UPDATE Keyword_Website_mapping
+        SET latest_manual_check_rank = $1, last_check_date = CURRENT_TIMESTAMP
+        WHERE keyword_id = $2 AND website_id = $3
+        RETURNING id, keyword_id, website_id, latest_manual_check_rank
       `;
+      const updateResult = await pool.query(updateQuery, [
+        latest_manual_check_rank,
+        keyword_id,
+        website_id,
+      ]);
 
-      db.run(
-        updateQuery,
-        [latest_manual_check_rank, keyword_id, website_id],
-        function (err) {
-          if (err) {
-            return res
-              .status(500)
-              .json({ error: "Database error while updating: " + err.message });
-          }
-
-          res.json({
-            message: "Mapping updated successfully",
-            mapping: {
-              id: row.id,
-              keyword_id,
-              website_id,
-              latest_manual_check_rank,
-            },
-          });
-        }
-      );
+      res.json({
+        message: "Mapping updated successfully",
+        mapping: updateResult.rows[0],
+      });
     } else {
-      // If row does not exist, insert a new mapping
+      // If the mapping doesn't exist, insert a new mapping
       const insertQuery = `
         INSERT INTO Keyword_Website_mapping (
           keyword_id, website_id, latest_manual_check_rank, last_check_date
         )
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        RETURNING id, keyword_id, website_id, latest_manual_check_rank
       `;
+      const insertResult = await pool.query(insertQuery, [
+        keyword_id,
+        website_id,
+        latest_manual_check_rank,
+      ]);
 
-      db.run(
-        insertQuery,
-        [keyword_id, website_id, latest_manual_check_rank],
-        function (err) {
-          if (err) {
-            return res.status(500).json({
-              error: "Database error while inserting: " + err.message,
-            });
-          }
-
-          res.json({
-            message: "Mapping added successfully",
-            mapping: {
-              id: this.lastID,
-              keyword_id,
-              website_id,
-              latest_manual_check_rank,
-            },
-          });
-        }
-      );
+      res.json({
+        message: "Mapping added successfully",
+        mapping: insertResult.rows[0],
+      });
     }
-  });
+  } catch (err) {
+    res.status(500).json({ error: "Database error: " + err.message });
+  }
 });
 
-// updating the latest_auto_check_rank
-// app.put("/keywordsauto/:id", verifyToken, (req, res) => {
-//   const { id: keyword_id } = req.params;
-//   const { website_id, latest_auto_search_rank } = req.body;
-
-//   if (latest_auto_search_rank === undefined || isNaN(latest_auto_search_rank)) {
-//     return res
-//       .status(400)
-//       .json({ message: "latest_auto_search_rank must be a valid integer." });
-//   }
-
-//   if (!website_id || isNaN(website_id)) {
-//     return res
-//       .status(400)
-//       .json({ message: "website_id must be a valid integer." });
-//   }
-
-//   const checkQuery = `
-//     SELECT id FROM Keyword_Website_mapping
-//     WHERE keyword_id = ? AND website_id = ?
-//   `;
-
-//   db.get(checkQuery, [keyword_id, website_id], (err, row) => {
-//     if (err) {
-//       return res.status(500).json({ error: "Database error: " + err.message });
-//     }
-
-//     if (row) {
-//       const updateQuery = `
-//         UPDATE Keyword_Website_mapping
-//         SET latest_auto_search_rank = ?, last_check_date = CURRENT_TIMESTAMP
-//         WHERE keyword_id = ? AND website_id = ?
-//       `;
-
-//       db.run(
-//         updateQuery,
-//         [latest_auto_search_rank, keyword_id, website_id],
-//         function (err) {
-//           if (err) {
-//             return res
-//               .status(500)
-//               .json({ error: "Database error while updating: " + err.message });
-//           }
-
-//           res.json({
-//             message: "Mapping updated successfully",
-//             mapping: {
-//               id: row.id,
-//               keyword_id,
-//               website_id,
-//               latest_auto_search_rank,
-//             },
-//           });
-//         }
-//       );
-//     } else {
-//       const insertQuery = `
-//         INSERT INTO Keyword_Website_mapping (
-//           keyword_id, website_id, latest_auto_search_rank, last_check_date
-//         )
-//         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-//       `;
-
-//       db.run(
-//         insertQuery,
-//         [keyword_id, website_id, latest_auto_search_rank],
-//         function (err) {
-//           if (err) {
-//             return res.status(500).json({
-//               error: "Database error while inserting: " + err.message,
-//             });
-//           }
-
-//           res.json({
-//             message: "Mapping added successfully",
-//             mapping: {
-//               id: this.lastID,
-//               keyword_id,
-//               website_id,
-//               latest_auto_search_rank,
-//             },
-//           });
-//         }
-//       );
-//     }
-//   });
-// });
-
 // updating the latest_auto_check_rank and also populating the rankhistory table
-app.put("/keywordsauto/:id", verifyToken, (req, res) => {
+app.put("/keywordsauto/:id", verifyToken, async (req, res) => {
   const { id: keyword_id } = req.params;
   let { website_id, latest_auto_search_rank } = req.body;
 
+  // Default value for invalid rank
   if (latest_auto_search_rank === undefined || isNaN(latest_auto_search_rank)) {
     latest_auto_search_rank = -1; // Set to -1 if invalid
   }
 
+  // Validate website_id
   if (!website_id || isNaN(website_id)) {
     return res
       .status(400)
       .json({ message: "website_id must be a valid integer." });
   }
 
-  const checkQuery = `
-    SELECT id FROM Keyword_Website_mapping 
-    WHERE keyword_id = ? AND website_id = ?
-  `;
+  try {
+    // Check if the mapping already exists
+    const checkQuery = `
+      SELECT id FROM Keyword_Website_mapping 
+      WHERE keyword_id = $1 AND website_id = $2
+    `;
+    const { rows: checkRows } = await pool.query(checkQuery, [
+      keyword_id,
+      website_id,
+    ]);
 
-  db.get(checkQuery, [keyword_id, website_id], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: "Database error: " + err.message });
-    }
-
-    const updateRankHistory = (callback) => {
+    // Function to update rank history
+    const updateRankHistory = async () => {
       const insertRankHistoryQuery = `
         INSERT INTO rankhistory (keyword_id, website_id, rank, checked_date)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
       `;
-
-      db.run(
-        insertRankHistoryQuery,
-        [keyword_id, website_id, latest_auto_search_rank],
-        (err) => {
-          if (err) {
-            return res.status(500).json({
-              error:
-                "Database error while updating rankhistory: " + err.message,
-            });
-          }
-          callback();
-        }
-      );
+      await pool.query(insertRankHistoryQuery, [
+        keyword_id,
+        website_id,
+        latest_auto_search_rank,
+      ]);
     };
 
-    if (row) {
+    if (checkRows.length > 0) {
+      // If mapping exists, update it
       const updateQuery = `
         UPDATE Keyword_Website_mapping 
-        SET latest_auto_search_rank = ?, last_check_date = CURRENT_TIMESTAMP
-        WHERE keyword_id = ? AND website_id = ?
+        SET latest_auto_search_rank = $1, last_check_date = CURRENT_TIMESTAMP
+        WHERE keyword_id = $2 AND website_id = $3
+        RETURNING id, keyword_id, website_id, latest_auto_search_rank
       `;
+      const { rows: updateRows } = await pool.query(updateQuery, [
+        latest_auto_search_rank,
+        keyword_id,
+        website_id,
+      ]);
 
-      db.run(
-        updateQuery,
-        [latest_auto_search_rank, keyword_id, website_id],
-        function (err) {
-          if (err) {
-            return res
-              .status(500)
-              .json({ error: "Database error while updating: " + err.message });
-          }
-
-          updateRankHistory(() => {
-            res.json({
-              message: "Mapping updated and rankhistory recorded successfully",
-              mapping: {
-                id: row.id,
-                keyword_id,
-                website_id,
-                latest_auto_search_rank,
-              },
-            });
-          });
-        }
-      );
+      // Update rank history and respond
+      await updateRankHistory();
+      res.json({
+        message: "Mapping updated and rankhistory recorded successfully",
+        mapping: updateRows[0],
+      });
     } else {
+      // If mapping doesn't exist, insert it
       const insertQuery = `
-        INSERT INTO Keyword_Website_mapping (
-          keyword_id, website_id, latest_auto_search_rank, last_check_date
-        )
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO Keyword_Website_mapping (keyword_id, website_id, latest_auto_search_rank, last_check_date)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        RETURNING id, keyword_id, website_id, latest_auto_search_rank
       `;
+      const { rows: insertRows } = await pool.query(insertQuery, [
+        keyword_id,
+        website_id,
+        latest_auto_search_rank,
+      ]);
 
-      db.run(
-        insertQuery,
-        [keyword_id, website_id, latest_auto_search_rank],
-        function (err) {
-          if (err) {
-            return res.status(500).json({
-              error: "Database error while inserting: " + err.message,
-            });
-          }
-
-          updateRankHistory(() => {
-            res.json({
-              message: "Mapping added and rankhistory recorded successfully",
-              mapping: {
-                id: this.lastID,
-                keyword_id,
-                website_id,
-                latest_auto_search_rank,
-              },
-            });
-          });
-        }
-      );
+      // Update rank history and respond
+      await updateRankHistory();
+      res.json({
+        message: "Mapping added and rankhistory recorded successfully",
+        mapping: insertRows[0],
+      });
     }
-  });
+  } catch (err) {
+    res.status(500).json({ error: "Database error: " + err.message });
+  }
 });
 
 //update status of keyword
-app.put("/keywords/:id/status", verifyToken, (req, res) => {
+app.put("/keywords/:id/status", verifyToken, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
+  // Validate the status value
   if (!["Active", "Inactive"].includes(status)) {
     return res.status(400).json({ error: "Invalid status value." });
   }
 
-  const query = `
-    UPDATE keywords
-    SET status = ?
-    WHERE id = ?
-  `;
+  try {
+    // Update the keyword's status
+    const query = `
+      UPDATE keywords
+      SET status = $1
+      WHERE id = $2
+      RETURNING id, status
+    `;
 
-  db.run(query, [status, id], function (err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
+    const { rows } = await pool.query(query, [status, id]);
 
-    if (this.changes === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ message: "Keyword not found." });
     }
 
-    res.json({ message: `Keyword status updated to ${status}` });
-  });
+    // Return a success message with the updated status
+    res.json({
+      message: `Keyword status updated to ${status}`,
+      keyword: rows[0],
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // Route to delete a keyword by its ID
-app.delete("/keywords/:id", verifyToken, (req, res) => {
+app.delete("/keywords/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
 
-  const query = `
-    DELETE FROM keywords WHERE id = ?
-  `;
+  try {
+    // Delete the keyword
+    const query = `
+      DELETE FROM keywords
+      WHERE id = $1
+      RETURNING id
+    `;
 
-  db.run(query, [id], function (err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
+    const { rows } = await pool.query(query, [id]);
 
-    if (this.changes === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ message: "Keyword not found." });
     }
 
+    // Return a success message
     res.json({ message: "Keyword deleted successfully" });
-  });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 //route to join keywords and rank route
 app.get(
   "/ranks/project/:project_id/website/:website_id",
   verifyToken,
-  (req, res) => {
+  async (req, res) => {
     const { project_id, website_id } = req.params;
 
+    // Validate project_id and website_id
     if (isNaN(project_id) || isNaN(website_id)) {
       return res
         .status(400)
         .json({ message: "project_id and website_id must be valid integers." });
     }
 
+    // Define the query to fetch ranks
     const query = `
-    SELECT 
-      k.id AS keyword_id,
-      k.keyword,
-      k.project_id,
-      k.search_location,
-      k.search_engine,
-      k.status AS keyword_status,
-      k.created_date AS keyword_created_date,
-      kwm.latest_auto_search_rank,
-      kwm.latest_manual_check_rank,
-      kwm.last_check_date
-    FROM keywords AS k
-    LEFT JOIN Keyword_Website_mapping AS kwm
-      ON k.id = kwm.keyword_id
-      AND kwm.website_id = ?
-    WHERE k.project_id = ?
-  `;
+      SELECT 
+        k.id AS keyword_id,
+        k.keyword,
+        k.project_id,
+        k.search_location,
+        k.search_engine,
+        k.status AS keyword_status,
+        k.created_date AS keyword_created_date,
+        kwm.latest_auto_search_rank,
+        kwm.latest_manual_check_rank,
+        kwm.last_check_date
+      FROM keywords AS k
+      LEFT JOIN Keyword_Website_mapping AS kwm
+        ON k.id = kwm.keyword_id
+        AND kwm.website_id = $1
+      WHERE k.project_id = $2
+    `;
 
-    db.all(query, [website_id, project_id], (err, rows) => {
-      if (err) {
-        return res
-          .status(500)
-          .json({ error: "Database error: " + err.message });
-      }
+    try {
+      // Execute the query with parameterized values
+      const { rows } = await pool.query(query, [website_id, project_id]);
 
+      // If no records are found, return a 404
       if (rows.length === 0) {
         return res.status(404).json({
           message: "No records found for the given project_id and website_id.",
         });
       }
 
+      // Send the results as JSON
       res.json({
         message: "Ranks fetched successfully",
         data: rows,
       });
-    });
+    } catch (err) {
+      // Handle errors
+      res.status(500).json({ error: "Database error: " + err.message });
+    }
   }
 );
 
 //route to retrieves all keywords for a specific project along with their corresponding rank for each website
-app.get("/project/:projectId/keywords", (req, res) => {
+app.get("/project/:projectId/keywords", async (req, res) => {
   const projectId = req.params.projectId;
 
+  // Define the query
   const query = `
     SELECT 
       k.id AS keyword_id,
@@ -870,21 +759,31 @@ app.get("/project/:projectId/keywords", (req, res) => {
     FROM keywords k
     INNER JOIN Keyword_Website_mapping kwm ON k.id = kwm.keyword_id
     INNER JOIN websites w ON kwm.website_id = w.id
-    WHERE k.project_id = ?
+    WHERE k.project_id = $1
     ORDER BY k.keyword, w.website;
   `;
 
-  db.all(query, [projectId], (err, rows) => {
-    if (err) {
-      console.error("Error fetching keywords:", err.message);
-      return res.status(500).json({ error: "Internal Server Error" });
+  try {
+    // Execute the query using parameterized values
+    const { rows } = await pool.query(query, [projectId]);
+
+    // If no results are found
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No keywords found for this project." });
     }
+
+    // Return the results
     res.json(rows);
-  });
+  } catch (err) {
+    console.error("Error fetching keywords:", err.message);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
 });
 
 //route to add new website
-app.post("/websites", verifyToken, (req, res) => {
+app.post("/websites", verifyToken, async (req, res) => {
   const {
     project_id,
     website,
@@ -894,50 +793,50 @@ app.post("/websites", verifyToken, (req, res) => {
   } = req.body;
   const { id: created_by } = req.user;
 
+  // Validate required fields
   if (!project_id || !website || !ownership_type || !website_type) {
     return res.status(400).json({ error: "All fields are required" });
   }
 
   const query = `
     INSERT INTO websites (project_id, website, ownership_type, website_type, created_by, status) 
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, project_id, website, ownership_type, website_type, created_by, status;
   `;
 
-  db.run(
-    query,
-    [project_id, website, ownership_type, website_type, created_by, status],
-    function (err) {
-      if (err) {
-        return res.status(400).json({ error: err.message });
-      }
-      res.json({
-        message: "Website added successfully",
-        website: {
-          id: this.lastID,
-          project_id,
-          website,
-          ownership_type,
-          website_type,
-          created_by,
-          status,
-        },
-      });
-    }
-  );
+  try {
+    // Execute the query
+    const { rows } = await pool.query(query, [
+      project_id,
+      website,
+      ownership_type,
+      website_type,
+      created_by,
+      status,
+    ]);
+
+    // Respond with the newly added website
+    res.json({
+      message: "Website added successfully",
+      website: rows[0], // Return the first row (the newly added website)
+    });
+  } catch (err) {
+    console.error("Error adding website:", err.message);
+    return res.status(400).json({ error: err.message });
+  }
 });
 
 // Route to get all websites for a specific project
-app.get("/websites/:project_id", verifyToken, (req, res) => {
+app.get("/websites/:project_id", verifyToken, async (req, res) => {
   const { project_id } = req.params;
 
   const query = `
-      SELECT * FROM websites WHERE project_id = ?
-    `;
+    SELECT * FROM websites WHERE project_id = $1;
+  `;
 
-  db.all(query, [project_id], (err, rows) => {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
+  try {
+    // Execute the query
+    const { rows } = await pool.query(query, [project_id]);
 
     if (rows.length === 0) {
       return res
@@ -946,64 +845,75 @@ app.get("/websites/:project_id", verifyToken, (req, res) => {
     }
 
     res.json({
-      message: "websites retrieved successfully ",
+      message: "websites retrieved successfully",
       websites: rows,
     });
-  });
+  } catch (err) {
+    console.error("Error fetching websites:", err.message);
+    return res.status(400).json({ error: err.message });
+  }
 });
 
 //update status of website
-app.put("/website/:id/status", verifyToken, (req, res) => {
+app.put("/website/:id/status", verifyToken, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
+  // Validate status
   if (!["Active", "Inactive"].includes(status)) {
     return res.status(400).json({ error: "Invalid status value." });
   }
 
   const query = `
     UPDATE websites
-    SET status = ?
-    WHERE id = ?
+    SET status = $1
+    WHERE id = $2
+    RETURNING id, status;
   `;
 
-  db.run(query, [status, id], function (err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
+  try {
+    // Execute the query
+    const { rows } = await pool.query(query, [status, id]);
 
-    if (this.changes === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ message: "Website not found." });
     }
 
-    res.json({ message: `Website status updated to ${status}` });
-  });
+    res.json({
+      message: `Website status updated to ${status}`,
+      website: rows[0], // Returning updated website data
+    });
+  } catch (err) {
+    console.error("Error updating website status:", err.message);
+    return res.status(400).json({ error: err.message });
+  }
 });
 
 // Route to get rank and date by keyword_id and website_id
-app.get("/rankhistory/:keywordId/:websiteId", (req, res) => {
+app.get("/rankhistory/:keywordId/:websiteId", async (req, res) => {
   const { keywordId, websiteId } = req.params;
 
   const query = `
-    SELECT rank, checked_date 
-    FROM rankhistory 
-    WHERE keyword_id = ? AND website_id = ?
+    SELECT rank, checked_date
+    FROM rankhistory
+    WHERE keyword_id = $1 AND website_id = $2
   `;
 
-  db.all(query, [keywordId, websiteId], (err, row) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      return res.status(500).json({ error: "Internal Server Error" });
-    }
+  try {
+    // Execute the query
+    const { rows } = await pool.query(query, [keywordId, websiteId]);
 
-    if (!row) {
+    if (rows.length === 0) {
       return res.status(404).json({
         message: "No record found for the given keyword and website.",
       });
     }
 
-    res.json(row);
-  });
+    res.json(rows);
+  } catch (err) {
+    console.error("Error fetching data:", err.message);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
 });
 
 //route and function for site audit
@@ -1021,12 +931,66 @@ app.get("/scrape", async (req, res) => {
     const baseDomain = new URL(url).hostname; // Extract base domain
     const results = await scrapeAllPages(url, baseDomain);
 
-    // Return scraped results
-    res.status(200).json({
-      uniqueLinks: Array.from(uniqueLinks), // Convert Set to Array
-      uniqueImages: Array.from(uniqueImages), // Convert Set to Array
-      pages: results, // Detailed page-wise scraping results
-    });
+    // Store scraped data into the PostgreSQL database
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Insert unique links
+      const uniqueLinksArray = Array.from(uniqueLinks);
+      for (const link of uniqueLinksArray) {
+        await client.query(
+          `INSERT INTO scraped_links (url, base_domain) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [link, baseDomain]
+        );
+      }
+
+      // Insert unique images
+      const uniqueImagesArray = Array.from(uniqueImages);
+      for (const image of uniqueImagesArray) {
+        await client.query(
+          `INSERT INTO scraped_images (image_url, base_domain) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [image, baseDomain]
+        );
+      }
+
+      // Insert detailed page scraping results
+      for (const page of results) {
+        await client.query(
+          `INSERT INTO scraped_pages 
+          (url, base_domain, linked_from, page_size, response_time_ms, title, meta_description, meta_keywords)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT DO NOTHING`,
+          [
+            page.url,
+            baseDomain,
+            page.linked_from || null,
+            page.page_size || null,
+            page.response_time_ms || null,
+            page.title || null,
+            page.metaTags?.Description || null,
+            page.metaTags?.Keywords || null,
+          ]
+        );
+      }
+
+      await client.query("COMMIT");
+
+      // Return scraped results
+      res.status(200).json({
+        uniqueLinks: uniqueLinksArray, // Links stored in DB
+        uniqueImages: uniqueImagesArray, // Images stored in DB
+        pages: results, // Detailed page-wise scraping results
+      });
+    } catch (dbErr) {
+      await client.query("ROLLBACK");
+      console.error("Database error:", dbErr.message);
+      res
+        .status(500)
+        .json({ error: "Failed to save scraped data to database." });
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error("Error scraping website:", error.message);
     res.status(500).json({ error: "Failed to scrape website." });
@@ -1214,9 +1178,10 @@ const updateJobStatus = async (
       result = $4,
       errors = $5, -- Update the errors field
       url = $6
-    WHERE job_id = $1;
+    WHERE id = $1;
   `;
 
+  // Prepare result data
   const resultData = {
     uniqueLinks: Array.from(uniqueLinks),
     uniqueImages: Array.from(uniqueImages),
@@ -1232,32 +1197,26 @@ const updateJobStatus = async (
     })),
   };
 
+  // Prepare query values
   const values = [
     jobId,
-    "completed",
-    100,
-    JSON.stringify(resultData),
-    JSON.stringify(errorLogs), // Save error logs as JSON
-    scrapedData[0] ? scrapedData[0].url : null, // Use the first scraped URL as representative
+    "completed", // Status
+    100, // Progress percentage
+    JSON.stringify(resultData), // Result data as JSON
+    JSON.stringify(errorLogs), // Error logs as JSON
+    scrapedData[0] ? scrapedData[0].url : null, // Representative URL
   ];
 
   try {
-    const res = await new Promise((resolve, reject) => {
-      db.run(query, values, function (err) {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(this.changes);
-        }
-      });
-    });
+    // Execute the query using a PostgreSQL client pool
+    const result = await pool.query(query, values);
 
-    if (res > 0) {
+    if (result.rowCount > 0) {
       console.log(
-        `Job updated successfully for websiteId ${websiteId} with jobId ${jobId}`
+        `Job updated successfully for websiteId ${websiteId} with jobId ${jobId}.`
       );
     } else {
-      console.log(`No job found with jobId ${jobId}.`);
+      console.warn(`No job found with jobId ${jobId}.`);
     }
   } catch (error) {
     console.error("Failed to update job status:", error.message);
@@ -1274,7 +1233,6 @@ const isSameDomain = (url, baseDomain) => {
   }
 };
 
-//background work test
 // Add a job to the scrape queue
 app.post("/scrape", async (req, res) => {
   const { url, websiteId } = req.body;
@@ -1294,56 +1252,77 @@ app.post("/scrape", async (req, res) => {
 
 // Job processing
 scrapeQueue.process(async (job) => {
-  const { url, websiteId } = job.data;
+  const { url, websiteId, jobId } = job.data; // Include jobId from database
   const baseDomain = new URL(url).hostname;
 
-  const auditBy = job.id; // Use the job ID as an identifier for the audit
+  const auditBy = job.id; // Bull job ID as an identifier for the audit
 
-  // console.log(
-  //   `Before processing, job ${job.id} isCompleted: ${await job.isCompleted()}`
-  // );
-
-  // console.log(`Processing job for URL: ${url} with Website ID: ${websiteId}`);
+  console.log(`Processing job for URL: ${url} with Website ID: ${websiteId}`);
 
   try {
+    // Initialize progress variables
     let totalScraped = 0;
     let totalUrls = 1; // Start with 1 to avoid division by zero
 
-    // Function to update progress
+    // Function to update progress in PostgreSQL
+    const updateProgress = async (scrapedData, queueSize) => {
+      totalScraped = scrapedData.length;
+      totalUrls = totalScraped + queueSize;
 
-    // Function to update progress
-    const updateProgress = (scrapedData, queueSize) => {
-      // Debugging: Check the contents of scrapedData and queueSize
-
-      // Should be an array
-      //console.log("Queue Size: ", queueSize);
-
-      const totalScraped = scrapedData.length;
-      const totalUrls = totalScraped + queueSize;
-
-      // Handle case where totalUrls is zero to avoid NaN
-      if (totalUrls === 0) totalUrls = 1;
-
+      // Ensure totalUrls is not zero to avoid NaN
       const progress = Math.min(
         ((totalScraped / totalUrls) * 100).toFixed(2),
         100
       );
-      //console.log(`Total Scraped: ${totalScraped}, Total URLs: ${totalUrls}`);
-      job.progress(progress); // Update progress in the job
-      //console.log(`Progress for Job ${job.id}: ${progress}%`);
+
+      // Update progress in the database
+      const query = `
+        UPDATE scraping_jobs
+        SET progress = $1
+        WHERE job_id = $2;
+      `;
+
+      await pool.query(query, [progress, jobId]); // Update the job's progress
+      console.log(`Progress for Job ${job.id}: ${progress}%`);
     };
+
     // Perform the scraping and database saving
     const results = await scrapeAllPages(
       url,
       baseDomain,
       websiteId,
       auditBy,
-      updateProgress
+      updateProgress // Pass the progress updater
     );
 
     console.log(
       `Scraping and database operations for Job ${job.id} completed.`
     );
+
+    // Save the final results in the database
+    const resultQuery = `
+      UPDATE scraping_jobs
+      SET
+        status = $1,
+        progress = $2,
+        result = $3,
+        errors = $4
+      WHERE job_id = $5;
+    `;
+
+    await pool.query(resultQuery, [
+      "completed",
+      100,
+      JSON.stringify({
+        uniqueLinks: Array.from(results.uniqueLinks),
+        uniqueImages: Array.from(results.uniqueImages),
+        pages: results.pages,
+      }),
+      JSON.stringify(results.errors),
+      jobId,
+    ]);
+
+    console.log(`Job ${job.id} updated successfully in the database.`);
 
     // Return the results to store in Bull's job.returnvalue
     return {
@@ -1354,6 +1333,22 @@ scrapeQueue.process(async (job) => {
     };
   } catch (error) {
     console.error(`Job ${job.id} failed:`, error.message);
+
+    // Update the job status to "failed" in the database
+    const errorQuery = `
+      UPDATE scraping_jobs
+      SET
+        status = $1,
+        errors = $2
+      WHERE job_id = $3;
+    `;
+
+    await pool.query(errorQuery, [
+      "failed",
+      JSON.stringify(error.message),
+      jobId,
+    ]);
+
     throw new Error("Scraping and saving data failed.");
   }
 });
@@ -1411,76 +1406,98 @@ app.get("/job-status/:jobId", async (req, res) => {
 
 //save to db
 const saveAuditData = async (websiteId, auditBy, scrapedData) => {
-  return new Promise((resolve, reject) => {
-    db.serialize(() => {
-      db.run(
-        `INSERT INTO Site_Audits (website_id, audit_by, audit_status) VALUES (?, ?, ?)`,
-        [websiteId, auditBy, "Completed"],
-        function (err) {
-          if (err) {
-            console.error("Error inserting into Site_Audits:", err.message);
-            return reject(err);
-          }
+  const client = await pool.connect(); // Get a connection from the pool
 
-          const auditId = this.lastID;
+  try {
+    await client.query("BEGIN"); // Start a transaction
 
-          const insertPages = scrapedData.pages.map(
-            (page) =>
-              new Promise((resolve, reject) => {
-                db.run(
-                  `INSERT INTO Site_Audit_Pages (audit_id, url, crawl_status, linked_from, page_size, response_time_ms, found_in_crawl, meta_title, meta_description, meta_keywords) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [
-                    auditId,
-                    page.url,
-                    "Completed",
-                    page.linked_from || null,
-                    page.page_size || null,
-                    page.response_time_ms || null,
-                    true,
-                    page.title || null,
-                    page.metaTags?.Description || null,
-                    page.metaTags?.Keywords || null,
-                  ],
-                  (err) => {
-                    if (err) return reject(err);
-                    resolve();
-                  }
-                );
-              })
-          );
+    let auditId;
 
-          const insertImages = scrapedData.uniqueImages.map(
-            (image) =>
-              new Promise((resolve, reject) => {
-                db.run(
-                  `INSERT INTO Site_Audit_Images (audit_id, image_url, crawl_status, linked_from, image_size, alt_text, file_name, response_time_ms) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [
-                    auditId,
-                    image,
-                    "Completed",
-                    image.linked_from || null,
-                    image.size || null,
-                    image.alt_text || null,
-                    image.file_name || null,
-                    image.response_time_ms || null,
-                  ],
-                  (err) => {
-                    if (err) return reject(err);
-                    resolve();
-                  }
-                );
-              })
-          );
+    // Insert into Site_Audits and return the generated audit_id
+    try {
+      const auditInsertQuery = `
+        INSERT INTO site_audits (audit_id, website_id, audit_by, audit_status) 
+        VALUES ($1, $2, $3, $4) RETURNING id
+      `;
+      const auditResult = await client.query(auditInsertQuery, [
+        auditBy,
+        websiteId,
+        auditBy,
+        "Completed",
+      ]);
+      auditId = auditResult.rows[0].id; // Get the generated audit ID
+      console.log("Audit ID created:", auditId);
+    } catch (err) {
+      console.error("Error inserting into site_audits:", err.message);
+      throw new Error("Failed to insert into site_audits.");
+    }
 
-          Promise.all([...insertPages, ...insertImages])
-            .then(() => resolve())
-            .catch((err) => reject(err));
-        }
-      );
-    });
-  });
+    // Insert data into Site_Audit_Pages
+    try {
+      for (const page of scrapedData.pages) {
+        await client.query(
+          `
+          INSERT INTO site_audit_pages 
+          (audit_id, url, crawl_status, linked_from, page_size, response_time_ms, found_in_crawl, meta_title, meta_description, meta_keywords) 
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `,
+          [
+            auditId,
+            page.url,
+            "Completed",
+            page.linked_from || null,
+            page.page_size || null,
+            page.response_time_ms || null,
+            true,
+            page.title || null,
+            page.metaTags?.Description || null,
+            page.metaTags?.Keywords || null,
+          ]
+        );
+        //console.log("Inserted page:", page.url);
+      }
+    } catch (err) {
+      console.error("Error inserting into site_audit_pages:", err.message);
+      throw new Error("Failed to insert into site_audit_pages.");
+    }
+
+    // Insert data into Site_Audit_Images
+    try {
+      for (const image of scrapedData.uniqueImages) {
+        await client.query(
+          `
+          INSERT INTO site_audit_images 
+          (audit_id, image_url, crawl_status, linked_from, image_size, alt_text, file_name, response_time_ms) 
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+          [
+            auditId,
+            image.url || null,
+            "Completed",
+            image.linked_from || null,
+            image.size || null,
+            image.alt_text || null,
+            image.url?.split("/").pop() || null,
+            image.response_time_ms || null,
+          ]
+        );
+        //console.log("Inserted image:", image.url);
+      }
+    } catch (err) {
+      console.error("Error inserting into site_audit_images:", err.message);
+      throw new Error("Failed to insert into site_audit_images.");
+    }
+
+    await client.query("COMMIT"); // Commit the transaction
+    console.log("Audit data saved successfully.");
+    return { success: true, auditId };
+  } catch (err) {
+    await client.query("ROLLBACK"); // Rollback the transaction in case of an error
+    console.error("Transaction failed:", err.message);
+    throw err; // Rethrow error for further handling
+  } finally {
+    client.release(); // Release the client back to the pool
+  }
 };
 
 //Save Jobs API
@@ -1496,29 +1513,43 @@ app.post("/scraping-jobs", async (req, res) => {
     });
   }
 
+  const client = await pool.connect(); // Get a client from the connection pool
+
   try {
-    await Promise.all(
-      jobs.map((job) =>
-        db.run(
-          `INSERT INTO scraping_jobs (id, url, website_id, status, progress, result) 
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET 
-             status = excluded.status, 
-             progress = excluded.progress, 
-             result = excluded.result`,
-          [
-            job.id,
-            job.url,
-            job.websiteId, // Ensure this is not null
-            job.status,
-            job.progress,
-            JSON.stringify(job.result),
-          ]
-        )
-      )
-    );
+    // Start a transaction
+    await client.query("BEGIN");
+
+    // Insert or update each job into scraping_jobs table
+    const jobInsertQuery = `
+      INSERT INTO scraping_jobs (id, url, website_id, status, progress, result)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status,
+        progress = excluded.progress,
+        result = excluded.result
+    `;
+
+    for (const job of jobs) {
+      await client.query(jobInsertQuery, [
+        job.id,
+        job.url,
+        job.websiteId, // Ensure this is not null
+        job.status,
+        job.progress,
+        JSON.stringify(job.result), // Storing the result as a JSON string
+      ]);
+    }
+
+    // Commit the transaction
+    await client.query("COMMIT");
+    client.release(); // Release the client back to the pool
+
     res.status(200).json({ message: "Jobs saved successfully" });
   } catch (error) {
+    // If an error occurs, rollback the transaction
+    await client.query("ROLLBACK");
+    client.release(); // Release the client back to the pool
+    console.error("Error saving scraping jobs:", error.message);
     res
       .status(500)
       .json({ message: "Failed to save jobs", error: error.message });
@@ -1527,49 +1558,47 @@ app.post("/scraping-jobs", async (req, res) => {
 
 // Fetch Jobs API
 app.get("/scraping-jobs", async (req, res) => {
+  const client = await pool.connect(); // Get a client from the connection pool
+
   try {
-    db.all("SELECT * FROM scraping_jobs", [], (err, rows) => {
-      if (err) {
-        console.error("Database query error:", err.message);
-        return res
-          .status(500)
-          .json({ message: "Database query failed", error: err.message });
-      }
+    // Query to get all scraping jobs, including the 'date' column
+    const result = await client.query("SELECT *, date FROM scraping_jobs");
 
-      if (!rows.length) {
-        console.log("No jobs found.");
-        return res.status(200).json([]); // Return an empty array if no jobs exist
-      }
+    if (result.rows.length === 0) {
+      console.log("No jobs found.");
+      return res.status(200).json([]); // Return an empty array if no jobs exist
+    }
 
-      // Safely process each row and attempt to parse the `result` field
-      const formattedJobs = rows.map((job) => {
-        let parsedResult = job.result;
+    // Safely process each row and attempt to parse the `result` field
+    const formattedJobs = result.rows.map((job) => {
+      let parsedResult = job.result;
 
-        try {
-          if (
-            job.result &&
-            job.result.startsWith("{") &&
-            job.result.endsWith("}")
-          ) {
-            parsedResult = JSON.parse(job.result);
-          }
-        } catch (jsonError) {
-          console.error(
-            `Failed to parse result JSON for job ID ${job.id}:`,
-            jsonError.message
-          );
+      try {
+        if (
+          job.result &&
+          job.result.startsWith("{") &&
+          job.result.endsWith("}")
+        ) {
+          parsedResult = JSON.parse(job.result);
         }
+      } catch (jsonError) {
+        console.error(
+          `Failed to parse result JSON for job ID ${job.id}:`,
+          jsonError.message
+        );
+      }
 
-        return { ...job, result: parsedResult }; // Include the parsed or raw result
-      });
-
-      res.status(200).json(formattedJobs); // Send the formatted jobs as the response
+      return { ...job, result: parsedResult }; // Include the parsed or raw result
     });
+
+    res.status(200).json(formattedJobs); // Send the formatted jobs as the response
   } catch (error) {
     console.error("Unexpected server error:", error.message);
     res
       .status(500)
       .json({ message: "Failed to fetch jobs", error: error.message });
+  } finally {
+    client.release(); // Release the client back to the pool
   }
 });
 
@@ -1583,26 +1612,27 @@ app.get("/scraping-jobs", async (req, res) => {
 // });
 
 // Route to get rank and date by keyword_id and website_id
-app.get("/results/:jobId", (req, res) => {
+app.get("/results/:jobId", async (req, res) => {
   const { jobId } = req.params;
+  const client = await pool.connect(); // Get a client from the connection pool
 
   const query = `
-    SELECT *
+    SELECT * 
     FROM scraping_jobs 
-    WHERE id = ? 
+    WHERE id = $1
   `;
 
-  db.get(query, [jobId.toString()], (err, row) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      return res.status(500).json({ error: "Internal Server Error" });
-    }
+  try {
+    // Query the database for the job with the provided jobId
+    const result = await client.query(query, [jobId]);
 
-    if (!row) {
+    if (result.rows.length === 0) {
       return res.status(404).json({
         message: "No record found for the given jobId.",
       });
     }
+
+    const row = result.rows[0]; // Get the first (and only) result row
 
     // Try to parse the result if it looks like JSON, otherwise leave as is
     let parsedResult = row.result;
@@ -1621,11 +1651,17 @@ app.get("/results/:jobId", (req, res) => {
       );
     }
 
+    // Return the job data along with the parsed or raw result
     res.json({
       ...row,
-      result: parsedResult, // Return parsed or raw result
+      result: parsedResult,
     });
-  });
+  } catch (error) {
+    console.error("Error fetching job data:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  } finally {
+    client.release(); // Release the client back to the pool
+  }
 });
 
 app.use((err, req, res, next) => {
@@ -1634,31 +1670,42 @@ app.use((err, req, res, next) => {
 });
 
 // Endpoint to update scraping job by jobId
-app.patch("/update-scraping-job", (req, res) => {
-  let { jobId, result } = req.body;
+app.patch("/update-scraping-job", async (req, res) => {
+  const { jobId, result } = req.body;
 
-  jobId = String(jobId);
+  const client = await pool.connect(); // Get a client from the connection pool
 
-  // Update the job status, progress, and result in the scraping_jobs table
-  const query = `
-    UPDATE scraping_jobs
-    SET status = 'completed',
-        progress = 100,
-        result = ? 
-    WHERE id = ?`;
+  try {
+    // Ensure jobId is treated as a string
+    const jobIdStr = String(jobId);
 
-  db.run(query, [result, jobId], function (err) {
-    if (err) {
-      console.error(err.message);
-      return res.status(500).json({ message: "Failed to update job" });
-    }
+    // SQL query to update the job status, progress, and result
+    const query = `
+      UPDATE scraping_jobs
+      SET status = 'completed',
+          progress = 100,
+          result = $1
+      WHERE id = $2
+    `;
 
-    if (this.changes === 0) {
+    // Execute the query with parameterized values
+    const resultUpdate = await client.query(query, [result, jobIdStr]);
+
+    if (resultUpdate.rowCount === 0) {
+      // No rows were updated, meaning the jobId was not found
       return res.status(404).json({ message: "Job not found" });
     }
 
+    // Return a success response if the update was successful
     res.status(200).json({ message: "Job updated successfully" });
-  });
+  } catch (error) {
+    console.error("Error updating job:", error.message);
+    res
+      .status(500)
+      .json({ message: "Failed to update job", error: error.message });
+  } finally {
+    client.release(); // Release the client back to the pool
+  }
 });
 
 // app.listen(PORT, () => {
