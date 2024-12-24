@@ -28,7 +28,7 @@ const PORT = 4000;
 const SECRET_KEY = process.env.SECRET_KEY;
 
 const pool = require("./config/db");
-//const fs = require("fs");
+const fs = require("fs");
 
 // const http = require("http");
 // const { Server } = require("socket.io");
