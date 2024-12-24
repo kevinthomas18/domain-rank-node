@@ -28,7 +28,7 @@ const PORT = 4000;
 const SECRET_KEY = process.env.SECRET_KEY;
 
 const pool = require("./config/db");
-const fs = require("fs");
+//const fs = require("fs");
 
 // const http = require("http");
 // const { Server } = require("socket.io");
@@ -41,16 +41,16 @@ const fs = require("fs");
 //   },
 // });
 
-const schemaSQL = fs.readFileSync("schema.sql", "utf8");
+// const schemaSQL = fs.readFileSync("schema.sql", "utf8");
 
-pool.query(schemaSQL, (err, res) => {
-  if (err) {
-    console.error("Error creating tables:", err.stack);
-  } else {
-    console.log("Tables created successfully");
-  }
-  pool.end();
-});
+// pool.query(schemaSQL, (err, res) => {
+//   if (err) {
+//     console.error("Error creating tables:", err.stack);
+//   } else {
+//     console.log("Tables created successfully");
+//   }
+//   pool.end();
+// });
 
 // const getUsers = async () => {
 //   try {
