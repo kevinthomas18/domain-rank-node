@@ -3,7 +3,7 @@ const express = require("express");
 const axios = require("axios");
 const cheerio = require("cheerio");
 const cors = require("cors");
-const bcrypt = require("bcryptjs");
+//const bcrypt = require("bcryptjs");
 const nodemailer = require("nodemailer");
 const crypto = require("crypto");
 const Queue = require("bull");
@@ -16,7 +16,7 @@ const scrapeQueue = new Queue("scrapeQueue", {
   },
 });
 
-const redis = require("redis");
+//const redis = require("redis");
 //const client = redis.createClient();
 
 const { imageSize } = require("image-size");
@@ -26,6 +26,8 @@ const jwt = require("jsonwebtoken");
 const app = express();
 const PORT = 4000;
 const SECRET_KEY = process.env.SECRET_KEY;
+
+const session = require("express-session");
 
 const pool = require("./config/db");
 //const fs = require("fs");
@@ -71,9 +73,666 @@ app.use(
   })
 );
 
+// Set up session middleware
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "your-secret-key", // Set a secret for signing the session ID cookie
+    resave: false, // Don't save the session if it was not modified
+    saveUninitialized: true, // Save a session even if it is new
+    cookie: { secure: false }, // Set to true for HTTPS, false for HTTP
+  })
+);
+
 // Middleware to parse JSON requests
 //app.use(express.json());
 app.use(express.json({ limit: "50mb" }));
+
+const { google } = require("googleapis");
+const { oauth2Client, authUrl, setCredentials } = require("./auth");
+
+// Middleware to verify JWT and extract the `created_by` value
+const verifyToken = (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "Access denied, no token provided" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, SECRET_KEY);
+    req.user = decoded;
+    next(); // Proceed to the next middleware or route handler
+  } catch (error) {
+    res.status(401).json({ error: "Invalid or expired token..." });
+  }
+};
+
+app.get("/api/analytics/properties", async (req, res) => {
+  try {
+    const analyticsAdmin = google.analyticsadmin("v1alpha");
+
+    // Authenticate API client
+    google.options({ auth: oauth2Client });
+
+    // Fetch accounts
+    const accountsResponse = await analyticsAdmin.accounts.list();
+    const accounts = accountsResponse.data.accounts || [];
+
+    if (!accounts.length) {
+      return res.status(200).json({ message: "No accounts found.", data: [] });
+    }
+
+    const result = [];
+    for (const account of accounts) {
+      console.log(
+        `Fetching properties for account: ${account.displayName} (${account.name})`
+      );
+
+      // Fetch properties for each account
+      const propertiesResponse = await analyticsAdmin.properties.list({
+        filter: `parent:${account.name}`, // Correct filter syntax for account ID
+      });
+
+      const properties = propertiesResponse.data.properties || [];
+      for (const property of properties) {
+        result.push({
+          accountName: account.displayName,
+          accountId: account.name,
+          propertyName: property.displayName,
+          propertyId: property.name,
+        });
+      }
+    }
+
+    res.json({ message: "Properties fetched successfully.", data: result });
+  } catch (error) {
+    console.error("Error fetching properties:", error.message);
+    res.status(500).json({ error: "Failed to fetch properties" });
+  }
+});
+// Fetch Google Analytics data
+app.post("/api/analytics", async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    const start = startDate || "7daysAgo";
+    const end = endDate || "today";
+
+    // Initialize Analytics Data API
+    const analyticsData = google.analyticsdata({
+      version: "v1beta",
+      auth: oauth2Client,
+    });
+
+    // Fetch analytics data
+    const response = await analyticsData.properties.runReport({
+      property: `properties/${process.env.GA4_PROPERTY_ID}`,
+      requestBody: {
+        dateRanges: [{ startDate: start, endDate: end }],
+        metrics: [
+          { name: "activeUsers" },
+          { name: "newUsers" },
+          { name: "eventCount" },
+          { name: "sessions" },
+        ],
+        dimensions: [
+          { name: "sessionDefaultChannelGrouping" }, // E.g., Organic Search, Direct, Referral
+        ],
+      },
+    });
+
+    // Format the response
+    const formattedResponse = response.data.rows.map((row) => {
+      return {
+        channel: row.dimensionValues[0]?.value || "Unknown", // Channel grouping
+        activeUsers: row.metricValues[0]?.value || "0",
+        newUsers: row.metricValues[1]?.value || "0",
+        eventCount: row.metricValues[2]?.value || "0",
+        sessions: row.metricValues[3]?.value || "0",
+      };
+    });
+
+    res.json({ data: formattedResponse });
+  } catch (error) {
+    console.error("Error fetching analytics data:", error);
+    res.status(500).json({ error: "Failed to fetch analytics data" });
+  }
+});
+
+app.get("/oauth2callback", async (req, res) => {
+  const { code } = req.query;
+
+  if (!code) {
+    return res.status(400).send("Missing authorization code");
+  }
+
+  try {
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    // Extract the access token
+    const accessToken = tokens.access_token;
+    const currentDate = new Date();
+
+    // Save the access token to the database
+    const query = `
+      INSERT INTO settings (key, value, date)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (key) 
+      DO UPDATE SET value = $2, date = $3
+      RETURNING *;
+    `;
+    const values = ["search console access token", accessToken, currentDate];
+
+    const result = await pool.query(query, values);
+    const savedToken = result.rows[0];
+    console.log("Access token saved to database:", savedToken);
+
+    // Redirect to the desired page
+    res.redirect("http://localhost:3000/dashboard/console");
+  } catch (error) {
+    console.error("Error during OAuth2 callback:", error);
+    res.status(500).send("Authentication failed");
+  }
+});
+
+// Route to get the access token from the settings table
+app.get("/get-access-token", verifyToken, async (req, res) => {
+  try {
+    const query = `
+      SELECT value AS access_token, date
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Access token not found" });
+    }
+
+    const { access_token, date } = result.rows[0];
+    res.status(200).json({ access_token, date });
+  } catch (error) {
+    console.error("Error fetching access token:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.get("/api/get-auth-url", (req, res) => {
+  try {
+    res.json({ authUrl });
+  } catch (error) {
+    console.error("Error generating auth URL:", error);
+    res.status(500).send("Error generating auth URL");
+  }
+});
+
+app.delete("/delete-access-token", async (req, res) => {
+  try {
+    const query = `
+      DELETE FROM settings
+      WHERE key = $1
+      RETURNING *;
+    `;
+    const values = ["search console access token"];
+    const result = await pool.query(query, values);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Access token not found" });
+    }
+
+    res.status(200).json({
+      message: "Access token deleted successfully",
+      deletedRecord: result.rows[0], // Return the deleted record
+    });
+  } catch (error) {
+    console.error("Error deleting access token:", error.message);
+    res.status(500).json({ error: "Failed to delete access token" });
+  }
+});
+
+app.get("/list-sites", async (req, res) => {
+  try {
+    // Query the database for the access token
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const result = await pool.query(query, values);
+
+    // If no access token is found, respond with Unauthorized error
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = result.rows[0].access_token;
+
+    // Set credentials using the access token from the database
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    // Use the access token to list the sites from Google Search Console
+    const searchConsole = google.webmasters({
+      version: "v3",
+      auth: oauth2Client,
+    });
+
+    const response = await searchConsole.sites.list();
+    res.json(response.data.siteEntry || []);
+  } catch (error) {
+    console.error("Error retrieving sites:", error);
+    res.status(500).send("Failed to retrieve sites");
+  }
+});
+
+// Step 3: Endpoint to fetch search analytics for a site
+// app.post("/search-analytics", async (req, res) => {
+//   const { siteUrl, startDate, endDate, dimensions, rowLimit } = req.body;
+
+//   if (!siteUrl) {
+//     return res.status(400).json({ error: "Missing siteUrl" });
+//   }
+
+//   try {
+//     // Fetch the access token from the settings table
+//     const query = `
+//       SELECT value AS access_token
+//       FROM settings
+//       WHERE key = $1;
+//     `;
+//     const values = ["search console access token"];
+//     const result = await pool.query(query, values);
+
+//     if (result.rows.length === 0) {
+//       return res.status(401).json({ error: "Unauthorized" });
+//     }
+
+//     const accessToken = result.rows[0].access_token;
+//     oauth2Client.setCredentials({ access_token: accessToken });
+
+//     const searchConsole = google.webmasters({
+//       version: "v3",
+//       auth: oauth2Client,
+//     });
+
+//     const response = await searchConsole.searchanalytics.query({
+//       siteUrl,
+//       requestBody: {
+//         startDate,
+//         endDate,
+//         dimensions: dimensions || ["query"],
+//         rowLimit: rowLimit || 10,
+//       },
+//     });
+
+//     res.json(response.data);
+//   } catch (error) {
+//     console.error("Error retrieving search analytics:", error);
+//     res.status(500).json({ error: "Error retrieving search analytics" });
+//   }
+// });
+
+app.post("/search-analytics", async (req, res) => {
+  const {
+    siteUrl,
+    startDate,
+    endDate,
+    dimensions,
+    rowLimit,
+    country,
+    device,
+    queryContains,
+    queryNotContains,
+    queryExactMatch,
+    urlContains,
+    urlNotContains,
+    urlExactMatch,
+  } = req.body;
+
+  if (!siteUrl) {
+    return res.status(400).json({ error: "Missing siteUrl" });
+  }
+
+  try {
+    // Fetch the access token from the settings table
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = result.rows[0].access_token;
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    const searchConsole = google.webmasters({
+      version: "v3",
+      auth: oauth2Client,
+    });
+
+    // Create the request body with filters
+    const filters = [];
+    if (country) {
+      filters.push({
+        dimension: "country",
+        operator: "equals",
+        expression: country.toUpperCase(),
+      });
+    }
+    if (device) {
+      filters.push({
+        dimension: "device",
+        operator: "equals",
+        expression: device,
+      });
+    }
+    if (queryContains) {
+      filters.push({
+        dimension: "query",
+        operator: "contains",
+        expression: queryContains,
+      });
+    }
+    if (queryNotContains) {
+      filters.push({
+        dimension: "query",
+        operator: "notContains",
+        expression: queryNotContains,
+      });
+    }
+    if (queryExactMatch) {
+      filters.push({
+        dimension: "query",
+        operator: "equals",
+        expression: queryExactMatch,
+      });
+    }
+    if (urlContains) {
+      filters.push({
+        dimension: "page",
+        operator: "contains",
+        expression: urlContains,
+      });
+    }
+    if (urlNotContains) {
+      filters.push({
+        dimension: "page",
+        operator: "notContains",
+        expression: urlNotContains,
+      });
+    }
+    if (urlExactMatch) {
+      filters.push({
+        dimension: "page",
+        operator: "equals",
+        expression: urlExactMatch,
+      });
+    }
+
+    const requestBody = {
+      startDate,
+      endDate,
+      dimensions: dimensions || ["query"],
+      rowLimit: rowLimit || 10,
+      dimensionFilterGroups: filters.length ? [{ filters }] : undefined,
+    };
+
+    const response = await searchConsole.searchanalytics.query({
+      siteUrl,
+      requestBody,
+    });
+
+    res.json(response.data);
+  } catch (error) {
+    console.error(
+      "Error retrieving search analytics:",
+      error.response?.data || error
+    );
+    res.status(500).json({ error: "Error retrieving search analytics" });
+  }
+});
+
+app.post("/pages", async (req, res) => {
+  const {
+    siteUrl,
+    startDate,
+    endDate,
+    rowLimit,
+    urlContains,
+    urlExactMatch,
+    urlNotContains,
+    device,
+    country,
+  } = req.body;
+
+  if (!siteUrl) {
+    return res.status(400).json({ error: "Missing siteUrl" });
+  }
+
+  try {
+    // Fetch the access token from the settings table
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = result.rows[0].access_token;
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    const searchConsole = google.webmasters({
+      version: "v3",
+      auth: oauth2Client,
+    });
+
+    const filters = [];
+    if (urlContains) {
+      filters.push({
+        dimension: "page",
+        operator: "contains",
+        expression: urlContains,
+      });
+    }
+    if (urlExactMatch) {
+      filters.push({
+        dimension: "page",
+        operator: "equals",
+        expression: urlExactMatch,
+      });
+    }
+    if (urlNotContains) {
+      filters.push({
+        dimension: "page",
+        operator: "notContains",
+        expression: urlNotContains,
+      });
+    }
+    if (device) {
+      filters.push({
+        dimension: "device",
+        operator: "equals",
+        expression: device,
+      });
+    }
+    if (country) {
+      filters.push({
+        dimension: "country",
+        operator: "equals",
+        expression: country,
+      });
+    }
+
+    const response = await searchConsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        startDate,
+        endDate,
+        dimensions: ["page"],
+        dimensionFilterGroups: [{ groupType: "and", filters }],
+        rowLimit: rowLimit || 10,
+      },
+    });
+
+    res.json(response.data);
+  } catch (error) {
+    console.error("Error retrieving pages:", error);
+    res.status(500).json({ error: "Error retrieving pages" });
+  }
+});
+
+//crawl error api -- this is not working proper now
+app.get("/crawl-errors/:siteUrl", async (req, res) => {
+  const { siteUrl } = req.params;
+
+  try {
+    // Fetch the access token from the settings table
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = result.rows[0].access_token;
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    const searchConsole = google.webmasters({
+      version: "v3",
+      auth: oauth2Client,
+    });
+
+    const response = await searchConsole.urlcrawlerrorssamples.query({
+      siteUrl,
+      category: "notFound",
+      platform: "web",
+    });
+
+    res.json(response.data || []);
+  } catch (error) {
+    console.error("Error retrieving crawl errors:", error.message);
+    res.status(500).json({ error: "Failed to retrieve crawl errors" });
+  }
+});
+
+app.get("/sitemaps/:siteUrl", async (req, res) => {
+  const { siteUrl } = req.params;
+
+  try {
+    // Fetch the access token from the settings table
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = result.rows[0].access_token;
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    const searchConsole = google.webmasters({
+      version: "v3",
+      auth: oauth2Client,
+    });
+
+    const response = await searchConsole.sitemaps.list({ siteUrl });
+    res.json(response.data.sitemap || []);
+  } catch (error) {
+    console.error("Error retrieving sitemaps:", error);
+    res.status(500).send("Failed to retrieve sitemaps");
+  }
+});
+
+// Add a new site
+app.post("/searchconsole/website", verifyToken, async (req, res) => {
+  const { site_name } = req.body;
+  const fetched_by = req.user.id;
+  const first_fetched_date = new Date();
+
+  if (!site_name) {
+    return res.status(400).json({ error: "Site name is required" });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO Search_Console_Sites (Site_name, First_fetched_Date, Fetched_by) VALUES ($1, $2, $3) RETURNING *`,
+      [site_name, first_fetched_date, fetched_by]
+    );
+    const newSite = result.rows[0];
+    res.status(201).json(newSite);
+  } catch (error) {
+    console.error("Error adding new site:", error);
+    if (error.code === "23505") {
+      // Handle duplicate site names
+      res.status(409).json({ error: "Site name already exists" });
+    } else {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+});
+
+// Get all sites for the logged-in user
+app.get("/searchconsole/websites", verifyToken, async (req, res) => {
+  const fetched_by = req.user.id;
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM Search_Console_Sites WHERE Fetched_by = $1 ORDER BY First_fetched_Date DESC`,
+      [fetched_by]
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("Error fetching sites:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Delete a site by ID
+app.delete("/searchconsole/website", verifyToken, async (req, res) => {
+  const { site_name } = req.body;
+  const fetched_by = req.user.id;
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM Search_Console_Sites WHERE site_name = $1 AND Fetched_by = $2 RETURNING *`,
+      [site_name, fetched_by]
+    );
+
+    if (result.rowCount === 0) {
+      return res
+        .status(404)
+        .json({ error: "Site not found or not authorized" });
+    }
+
+    res.status(200).json({ message: "Site deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting site:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 // Configure the email transporter
 const transporter = nodemailer.createTransport({
@@ -258,23 +917,6 @@ app.get("/profile", async (req, res) => {
     res.status(401).json({ error: "Invalid or expired token" });
   }
 });
-
-// Middleware to verify JWT and extract the `created_by` value
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ error: "Access denied, no token provided" });
-  }
-
-  try {
-    const decoded = jwt.verify(token, SECRET_KEY);
-    req.user = decoded;
-    next(); // Proceed to the next middleware or route handler
-  } catch (error) {
-    res.status(401).json({ error: "Invalid or expired token..." });
-  }
-};
 
 // --- Project Routes ---
 
