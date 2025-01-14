@@ -109,6 +109,23 @@ const verifyToken = (req, res, next) => {
 
 app.get("/api/analytics/properties", async (req, res) => {
   try {
+    const query = `
+    SELECT value AS access_token
+    FROM settings
+    WHERE key = $1;
+  `;
+    const values = ["search console access token"];
+    const token = await pool.query(query, values);
+
+    // If no access token is found, respond with Unauthorized error
+    if (token.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = token.rows[0].access_token;
+
+    // Set credentials using the access token from the database
+    oauth2Client.setCredentials({ access_token: accessToken });
     const analyticsAdmin = google.analyticsadmin("v1alpha");
 
     // Authenticate API client
@@ -124,10 +141,6 @@ app.get("/api/analytics/properties", async (req, res) => {
 
     const result = [];
     for (const account of accounts) {
-      console.log(
-        `Fetching properties for account: ${account.displayName} (${account.name})`
-      );
-
       // Fetch properties for each account
       const propertiesResponse = await analyticsAdmin.properties.list({
         filter: `parent:${account.name}`, // Correct filter syntax for account ID
@@ -150,23 +163,117 @@ app.get("/api/analytics/properties", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch properties" });
   }
 });
+
+//business profile api start
+app.get("/api/business/profiles", async (req, res) => {
+  try {
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const token = await pool.query(query, values);
+
+    if (token.rows.length === 0) {
+      return res
+        .status(401)
+        .json({ error: "Unauthorized: Access token not found" });
+    }
+
+    const accessToken = token.rows[0].access_token;
+
+    // Set credentials using the access token
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    // Set global authentication for Google APIs
+    google.options({ auth: oauth2Client });
+
+    // Use Google Business Profile API
+    const myBusinessAccount = google.mybusinessaccountmanagement("v1");
+
+    // Fetch accounts
+    const accountsResponse = await myBusinessAccount.accounts.list();
+    const accounts = accountsResponse.data.accounts || [];
+
+    if (!accounts.length) {
+      return res
+        .status(200)
+        .json({ message: "No business accounts found.", data: [] });
+    }
+
+    const result = [];
+
+    for (const account of accounts) {
+      // Fetch locations for each account
+      const locationsResponse = await myBusinessAccount.accounts.locations.list(
+        {
+          parent: account.name, // Use account resource name as the parent
+        }
+      );
+
+      const locations = locationsResponse.data.locations || [];
+      for (const location of locations) {
+        result.push({
+          accountName: account.accountName,
+          accountId: account.name,
+          locationName: location.locationName,
+          locationId: location.name,
+          primaryCategory: location.primaryCategory.displayName,
+          address: location.address,
+          phoneNumber: location.phoneNumbers?.primaryPhone,
+        });
+      }
+    }
+
+    res.json({
+      message: "Business profiles and locations fetched successfully.",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching business profiles:", error.message);
+    res.status(500).json({ error: "Failed to fetch business profiles" });
+  }
+});
+
+//business profile api end
 // Fetch Google Analytics data
+
 app.post("/api/analytics", async (req, res) => {
   try {
-    const { startDate, endDate } = req.body;
+    const { startDate, endDate, propertyId } = req.body;
+
+    if (!propertyId) {
+      return res.status(400).json({ error: "Property ID is required" });
+    }
 
     const start = startDate || "7daysAgo";
     const end = endDate || "today";
+    const property_Id = propertyId;
 
-    // Initialize Analytics Data API
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const token = await pool.query(query, values);
+
+    if (token.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = token.rows[0].access_token;
+
+    oauth2Client.setCredentials({ access_token: accessToken });
+
     const analyticsData = google.analyticsdata({
       version: "v1beta",
       auth: oauth2Client,
     });
 
-    // Fetch analytics data
     const response = await analyticsData.properties.runReport({
-      property: `properties/${process.env.GA4_PROPERTY_ID}`,
+      property: property_Id,
       requestBody: {
         dateRanges: [{ startDate: start, endDate: end }],
         metrics: [
@@ -174,21 +281,53 @@ app.post("/api/analytics", async (req, res) => {
           { name: "newUsers" },
           { name: "eventCount" },
           { name: "sessions" },
+          { name: "engagedSessions" },
+          { name: "bounceRate" },
+          //{ name: "ecommercePurchases" },
+          //{ name: "adClicks" },
+          //{ name: "userKeyEventRate" },
         ],
         dimensions: [
-          { name: "sessionDefaultChannelGrouping" }, // E.g., Organic Search, Direct, Referral
+          { name: "sessionDefaultChannelGrouping" },
+          //{ name: "sessionSource" },
+          //{ name: "sessionMedium" },
+          //{ name: "city" },
+          //{ name: "deviceCategory" },
+          //{ name: "country" },
+          //{ name: "region" },
+          //{ name: "deviceCategory" },
+          //{ name: "operatingSystem" },
+          //{ name: "language" },
+          //{ name: "browser" },
+          //{ name: "userAgeBracket" },
+          //{ name: "userGender" },
         ],
       },
     });
 
-    // Format the response
+    // const formattedResponse = response.data.rows.map((row) => {
+    //   return {
+    //     channel: row.dimensionValues[0]?.value || "Unknown",
+    //     activeUsers: row.metricValues[0]?.value || "0",
+    //     newUsers: row.metricValues[1]?.value || "0",
+    //     eventCount: row.metricValues[2]?.value || "0",
+    //     sessions: row.metricValues[3]?.value || "0",
+    //   };
+    // });
+
     const formattedResponse = response.data.rows.map((row) => {
       return {
-        channel: row.dimensionValues[0]?.value || "Unknown", // Channel grouping
+        channel: row.dimensionValues[0]?.value || "Unknown", // Assumes "sessionDefaultChannelGrouping" is the first dimension
+        city: row.dimensionValues[1]?.value || "Unknown", // Assumes "city" is the second dimension
+        deviceCategory: row.dimensionValues[2]?.value || "Unknown", // If more dimensions are added, adjust indices
+
         activeUsers: row.metricValues[0]?.value || "0",
         newUsers: row.metricValues[1]?.value || "0",
         eventCount: row.metricValues[2]?.value || "0",
         sessions: row.metricValues[3]?.value || "0",
+        engagedSessions: row.metricValues[4]?.value || "0",
+        bounceRate: row.metricValues[5]?.value || "0",
+        //ecommercePurchases: row.metricValues[6]?.value || "0",
       };
     });
 
@@ -198,6 +337,429 @@ app.post("/api/analytics", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch analytics data" });
   }
 });
+
+app.post("/api/page-analytics", async (req, res) => {
+  try {
+    const { startDate, endDate, propertyId } = req.body;
+
+    if (!propertyId) {
+      return res.status(400).json({ error: "Property ID is required" });
+    }
+
+    const start = startDate || "7daysAgo";
+    const end = endDate || "today";
+    const property_Id = propertyId;
+
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const token = await pool.query(query, values);
+
+    if (token.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = token.rows[0].access_token;
+
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    const analyticsData = google.analyticsdata({
+      version: "v1beta",
+      auth: oauth2Client,
+    });
+
+    const response = await analyticsData.properties.runReport({
+      property: property_Id,
+      requestBody: {
+        dateRanges: [{ startDate: start, endDate: end }],
+        metrics: [
+          { name: "activeUsers" },
+          { name: "newUsers" },
+          { name: "sessions" },
+          { name: "engagedSessions" },
+          { name: "bounceRate" },
+        ],
+        dimensions: [
+          { name: "pagePath" }, // Retrieve data for individual pages
+          { name: "pageTitle" }, // Optional: Include page title for context
+        ],
+      },
+    });
+
+    const formattedResponse = response.data.rows.map((row) => {
+      return {
+        pagePath: row.dimensionValues[0]?.value || "Unknown",
+        pageTitle: row.dimensionValues[1]?.value || "Unknown",
+
+        activeUsers: row.metricValues[0]?.value || "0",
+        newUsers: row.metricValues[1]?.value || "0",
+        sessions: row.metricValues[2]?.value || "0",
+        engagedSessions: row.metricValues[3]?.value || "0",
+        bounceRate: row.metricValues[4]?.value || "0",
+      };
+    });
+
+    res.json({ data: formattedResponse });
+  } catch (error) {
+    console.error("Error fetching page analytics data:", error);
+    res.status(500).json({ error: "Failed to fetch page analytics data" });
+  }
+});
+
+// app.post("/api/analytics/page-details", async (req, res) => {
+//   try {
+//     const { propertyId, pagePath, startDate, endDate, comparisonStartDate } =
+//       req.body;
+
+//     if (!propertyId || !pagePath) {
+//       return res
+//         .status(400)
+//         .json({ error: "Property ID and Page Path are required" });
+//     }
+
+//     const start = startDate || "7daysAgo";
+//     const end = endDate || "today";
+//     const comparisonStart = comparisonStartDate || "14daysAgo";
+
+//     const query = `
+//       SELECT value AS access_token
+//       FROM settings
+//       WHERE key = $1;
+//     `;
+//     const values = ["search console access token"];
+//     const token = await pool.query(query, values);
+
+//     if (token.rows.length === 0) {
+//       return res.status(401).json({ error: "Unauthorized" });
+//     }
+
+//     const accessToken = token.rows[0].access_token;
+
+//     oauth2Client.setCredentials({ access_token: accessToken });
+
+//     const analyticsData = google.analyticsdata({
+//       version: "v1beta",
+//       auth: oauth2Client,
+//     });
+
+//     // Fetch analytics for the given date range
+//     const response = await analyticsData.properties.runReport({
+//       property: propertyId,
+//       requestBody: {
+//         dateRanges: [{ startDate: start, endDate: end }],
+//         dimensions: [{ name: "country" }, { name: "pagePath" }],
+//         metrics: [{ name: "activeUsers" }, { name: "newUsers" }],
+//         dimensionFilter: {
+//           filter: {
+//             fieldName: "pagePath",
+//             stringFilter: { value: pagePath },
+//           },
+//         },
+//       },
+//     });
+
+//     // Fetch comparison data
+//     const comparisonResponse = await analyticsData.properties.runReport({
+//       property: propertyId,
+//       requestBody: {
+//         dateRanges: [{ startDate: comparisonStart, endDate: start }],
+//         dimensions: [{ name: "pagePath" }],
+//         metrics: [{ name: "activeUsers" }],
+//         dimensionFilter: {
+//           filter: {
+//             fieldName: "pagePath",
+//             stringFilter: { value: pagePath },
+//           },
+//         },
+//       },
+//     });
+
+//     const details = response.data.rows.map((row) => ({
+//       country: row.dimensionValues[0]?.value || "Unknown",
+//       pagePath: row.dimensionValues[1]?.value || "Unknown",
+//       activeUsers: row.metricValues[0]?.value || "0",
+//       newUsers: row.metricValues[1]?.value || "0",
+//     }));
+
+//     const previousActiveUsers =
+//       comparisonResponse.data.rows?.[0]?.metricValues?.[0]?.value || "0";
+
+//     const percentageChange =
+//       previousActiveUsers > 0
+//         ? (
+//             ((details[0].activeUsers - previousActiveUsers) /
+//               previousActiveUsers) *
+//             100
+//           ).toFixed(2)
+//         : "N/A";
+
+//     res.json({
+//       details,
+//       percentageChange,
+//     });
+//   } catch (error) {
+//     console.error("Error fetching page details:", error);
+//     res.status(500).json({ error: "Failed to fetch page details" });
+//   }
+// });
+
+app.post("/api/analytics/page-details", async (req, res) => {
+  try {
+    const { propertyId, pagePath, startDate, endDate, comparisonStartDate } =
+      req.body;
+
+    if (!propertyId || !pagePath) {
+      return res
+        .status(400)
+        .json({ error: "Property ID and Page Path are required" });
+    }
+
+    const start = startDate || "7daysAgo";
+    const end = endDate || "today";
+    const comparisonStart = comparisonStartDate || "14daysAgo";
+
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const token = await pool.query(query, values);
+
+    if (token.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = token.rows[0].access_token;
+
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    const analyticsData = google.analyticsdata({
+      version: "v1beta",
+      auth: oauth2Client,
+    });
+
+    // Fetch analytics for the given date range
+    const response = await analyticsData.properties.runReport({
+      property: propertyId,
+      requestBody: {
+        dateRanges: [{ startDate: start, endDate: end }],
+        dimensions: [{ name: "country" }, { name: "pagePath" }],
+        metrics: [{ name: "activeUsers" }, { name: "newUsers" }],
+        dimensionFilter: {
+          filter: {
+            fieldName: "pagePath",
+            stringFilter: { value: pagePath },
+          },
+        },
+      },
+    });
+
+    const responseByChannel = await analyticsData.properties.runReport({
+      property: propertyId,
+      requestBody: {
+        dateRanges: [{ startDate: start, endDate: end }],
+        dimensions: [{ name: "sessionDefaultChannelGrouping" }],
+        metrics: [{ name: "activeUsers" }, { name: "newUsers" }],
+        dimensionFilter: {
+          filter: {
+            fieldName: "pagePath",
+            stringFilter: { value: pagePath },
+          },
+        },
+      },
+    });
+
+    // Fetch comparison data for channels
+    const comparisonResponseByChannel =
+      await analyticsData.properties.runReport({
+        property: propertyId,
+        requestBody: {
+          dateRanges: [{ startDate: comparisonStart, endDate: start }],
+          dimensions: [{ name: "sessionDefaultChannelGrouping" }],
+          metrics: [{ name: "activeUsers" }],
+          dimensionFilter: {
+            filter: {
+              fieldName: "pagePath",
+              stringFilter: { value: pagePath },
+            },
+          },
+        },
+      });
+
+    // Process the channel data with percentage change
+    const channelDetails = responseByChannel.data.rows.map((row) => {
+      const channel = row.dimensionValues[0]?.value || "Unknown";
+      const activeUsers = parseInt(row.metricValues[0]?.value || "0", 10);
+      const newUsers = parseInt(row.metricValues[1]?.value || "0", 10);
+
+      const previousData = comparisonResponseByChannel.data.rows.find(
+        (comparisonRow) => comparisonRow.dimensionValues[0]?.value === channel
+      );
+
+      const previousActiveUsers = parseInt(
+        previousData?.metricValues[0]?.value || "0",
+        10
+      );
+
+      const percentageChange =
+        previousActiveUsers > 0
+          ? (
+              ((activeUsers - previousActiveUsers) / previousActiveUsers) *
+              100
+            ).toFixed(2)
+          : previousActiveUsers === 0 && activeUsers > 0
+          ? "100" // New data
+          : "0"; // No change or no data
+
+      return {
+        channel,
+        activeUsers,
+        newUsers,
+        percentageChange,
+      };
+    });
+
+    // Fetch comparison data
+    const comparisonResponse = await analyticsData.properties.runReport({
+      property: propertyId,
+      requestBody: {
+        dateRanges: [{ startDate: comparisonStart, endDate: start }],
+        dimensions: [{ name: "country" }, { name: "pagePath" }],
+        metrics: [{ name: "activeUsers" }],
+        dimensionFilter: {
+          filter: {
+            fieldName: "pagePath",
+            stringFilter: { value: pagePath },
+          },
+        },
+      },
+    });
+
+    const details = response.data.rows.map((row) => {
+      const country = row.dimensionValues[0]?.value || "Unknown";
+      const activeUsers = parseInt(row.metricValues[0]?.value || "0", 10);
+      const newUsers = parseInt(row.metricValues[1]?.value || "0", 10);
+
+      const previousData = comparisonResponse.data.rows.find(
+        (comparisonRow) => comparisonRow.dimensionValues[0]?.value === country
+      );
+
+      const previousActiveUsers = parseInt(
+        previousData?.metricValues[0]?.value || "0",
+        10
+      );
+
+      const percentageChange =
+        previousActiveUsers > 0
+          ? (
+              ((activeUsers - previousActiveUsers) / previousActiveUsers) *
+              100
+            ).toFixed(2)
+          : previousActiveUsers === 0 && activeUsers > 0
+          ? "100" // New data
+          : "0"; // No change or no data
+
+      return {
+        country,
+        activeUsers,
+        newUsers,
+        percentageChange,
+      };
+    });
+    const totalActiveUsers = response.data.rows.reduce(
+      (sum, row) => sum + parseInt(row.metricValues[0]?.value || "0", 10),
+      0
+    );
+
+    const totalPreviousActiveUsers = comparisonResponse.data.rows.reduce(
+      (sum, row) => sum + parseInt(row.metricValues[0]?.value || "0", 10),
+      0
+    );
+
+    const totalPercentageChange =
+      totalPreviousActiveUsers > 0
+        ? (
+            ((totalActiveUsers - totalPreviousActiveUsers) /
+              totalPreviousActiveUsers) *
+            100
+          ).toFixed(2)
+        : totalPreviousActiveUsers === 0 && totalActiveUsers > 0
+        ? "100"
+        : "0";
+
+    res.json({ details, totalPercentageChange, channelDetails });
+  } catch (error) {
+    console.error("Error fetching page details:", error);
+    res.status(500).json({ error: "Failed to fetch page details" });
+  }
+});
+
+app.post("/api/analytics/traffic-by-date", async (req, res) => {
+  try {
+    const { propertyId, pagePath, startDate, endDate } = req.body;
+
+    if (!propertyId || !pagePath) {
+      return res
+        .status(400)
+        .json({ error: "Property ID and Page Path are required" });
+    }
+
+    const start = startDate || "7daysAgo";
+    const end = endDate || "today";
+
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const token = await pool.query(query, values);
+
+    if (token.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = token.rows[0].access_token;
+
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    const analyticsData = google.analyticsdata({
+      version: "v1beta",
+      auth: oauth2Client,
+    });
+
+    const response = await analyticsData.properties.runReport({
+      property: propertyId,
+      requestBody: {
+        dateRanges: [{ startDate: start, endDate: end }],
+        dimensions: [{ name: "date" }, { name: "pagePath" }],
+        metrics: [{ name: "activeUsers" }, { name: "newUsers" }],
+        dimensionFilter: {
+          filter: {
+            fieldName: "pagePath",
+            stringFilter: { value: pagePath },
+          },
+        },
+      },
+    });
+
+    const dailyTraffic = response.data.rows.map((row) => ({
+      date: row.dimensionValues[0]?.value,
+      activeUsers: parseInt(row.metricValues[0]?.value || "0", 10),
+      newUsers: parseInt(row.metricValues[1]?.value || "0", 10),
+    }));
+
+    res.json({ dailyTraffic });
+  } catch (error) {
+    console.error("Error fetching traffic by date:", error);
+    res.status(500).json({ error: "Failed to fetch traffic by date" });
+  }
+});
+
 
 app.get("/oauth2callback", async (req, res) => {
   const { code } = req.query;
@@ -229,7 +791,7 @@ app.get("/oauth2callback", async (req, res) => {
     console.log("Access token saved to database:", savedToken);
 
     // Redirect to the desired page
-    res.redirect("http://localhost:3000/dashboard/console");
+    res.redirect("http://localhost:3000/dashboard/searchconsole");
   } catch (error) {
     console.error("Error during OAuth2 callback:", error);
     res.status(500).send("Authentication failed");
@@ -710,6 +1272,81 @@ app.get("/searchconsole/websites", verifyToken, async (req, res) => {
   }
 });
 
+app.get("/analytics/accounts", verifyToken, async (req, res) => {
+  const fetched_by = req.user.id;
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM analytics_accounts WHERE Fetched_by = $1 ORDER BY First_fetched_Date DESC`,
+      [fetched_by]
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("Error fetching accounts:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.get("/analytics/accounts", verifyToken, async (req, res) => {
+  const fetched_by = req.user.id;
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM analytics_accounts WHERE Fetched_by = $1 ORDER BY First_fetched_Date DESC`,
+      [fetched_by]
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("Error fetching sites:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/analyticsaccounts/add", verifyToken, async (req, res) => {
+  const { account_name, account_id, property_name, property_id, project_id } =
+    req.body;
+  const fetched_by = req.user.id; // Assumes `req.user.id` contains the ID of the authenticated user
+  const first_fetched_date = new Date();
+
+  // Validate required fields
+  if (
+    !account_name ||
+    !account_id ||
+    !property_name ||
+    !property_id ||
+    !project_id
+  ) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO analytics_accounts (account_name, account_id, property_name, property_id, fetched_by, first_fetched_date, project_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        account_name,
+        account_id,
+        property_name,
+        property_id,
+        fetched_by,
+        first_fetched_date,
+        project_id,
+      ]
+    );
+
+    const newAccount = result.rows[0];
+    res.status(201).json(newAccount);
+  } catch (error) {
+    console.error("Error adding new account:", error);
+    if (error.code === "23505") {
+      // Handle duplicate entries (if any unique constraints are defined)
+      res.status(409).json({ error: "Account already exists" });
+    } else {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+});
+
 // Delete a site by ID
 app.delete("/searchconsole/website", verifyToken, async (req, res) => {
   const { site_name } = req.body;
@@ -734,11 +1371,35 @@ app.delete("/searchconsole/website", verifyToken, async (req, res) => {
   }
 });
 
+app.delete("/analyticsaccount/remove", verifyToken, async (req, res) => {
+  const { property_name } = req.body;
+  const fetched_by = req.user.id;
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM analytics_accounts WHERE property_name = $1 AND Fetched_by = $2 RETURNING *`,
+      [property_name, fetched_by]
+    );
+
+    if (result.rowCount === 0) {
+      return res
+        .status(404)
+        .json({ error: "Account not found or not authorized" });
+    }
+
+    res.status(200).json({ message: "Account deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting Account:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Configure the email transporter
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: "notifications-no-reply@spiderworks.info",
+    user: "kevin@spiderworks.in",
+    //user: "notifications-no-reply@spiderworks.info",
     pass: process.env.EMAIL_PASS,
   },
 });
@@ -783,6 +1444,7 @@ app.post("/add-auth-user", async (req, res) => {
 //Request OTP
 app.post("/request-auth-otp", async (req, res) => {
   const { email } = req.body;
+  console.log(email);
 
   if (!email) {
     return res.status(400).json({ message: "Email is required" });

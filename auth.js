@@ -15,6 +15,7 @@ const authUrl = oauth2Client.generateAuthUrl({
     "https://www.googleapis.com/auth/analytics.readonly",
     "https://www.googleapis.com/auth/analytics.manage.users.readonly",
     "https://www.googleapis.com/auth/webmasters.readonly",
+    "https://www.googleapis.com/auth/business.manage",
   ],
 });
 
