@@ -1,6 +1,6 @@
 
 
- DROP TABLE IF EXISTS users;
+ --DROP TABLE IF EXISTS users;
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT
 );
 
- DROP TABLE IF EXISTS auth_users;
+ --DROP TABLE IF EXISTS auth_users;
 
 CREATE TABLE IF NOT EXISTS auth_users (
     id SERIAL PRIMARY KEY,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS auth_users (
     otp_expiry TIMESTAMP
 );
 
-DROP TABLE IF EXISTS projects;
+--DROP TABLE IF EXISTS projects;
 
 CREATE TABLE IF NOT EXISTS projects (
     id SERIAL PRIMARY KEY,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS projects (
         ON DELETE NO ACTION
 );
 
-DROP TABLE IF EXISTS keywords;
+--DROP TABLE IF EXISTS keywords;
 
 CREATE TABLE IF NOT EXISTS keywords (
     id SERIAL PRIMARY KEY,
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS keywords (
         ON DELETE NO ACTION
 );
 
-DROP TABLE IF EXISTS rankhistory;
+--DROP TABLE IF EXISTS rankhistory;
 
 CREATE TABLE IF NOT EXISTS rankhistory (
     id SERIAL PRIMARY KEY,
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS rankhistory (
         ON DELETE NO ACTION
 );
 
-DROP TABLE IF EXISTS websites;
+--DROP TABLE IF EXISTS websites;
 
 CREATE TABLE IF NOT EXISTS websites (
     id SERIAL PRIMARY KEY,
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS websites (
         ON DELETE NO ACTION
 );
 
-DROP TABLE IF EXISTS keyword_website_mapping;
+--DROP TABLE IF EXISTS keyword_website_mapping;
 
 CREATE TABLE IF NOT EXISTS keyword_website_mapping (
     id SERIAL PRIMARY KEY,
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS keyword_website_mapping (
         ON DELETE NO ACTION
 );
 
-DROP TABLE IF EXISTS site_audits;
+--DROP TABLE IF EXISTS site_audits;
 
 CREATE TABLE IF NOT EXISTS site_audits (
     id SERIAL PRIMARY KEY,
@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS site_audits (
         ON DELETE CASCADE
 );
 
-DROP TABLE IF EXISTS site_audit_pages;
+--DROP TABLE IF EXISTS site_audit_pages;
 
 CREATE TABLE IF NOT EXISTS site_audit_pages (
     id SERIAL PRIMARY KEY,
@@ -159,7 +159,7 @@ CREATE TABLE IF NOT EXISTS site_audit_pages (
 );
 
 -- Drop and recreate site_audit_images table
-DROP TABLE IF EXISTS site_audit_images;
+--DROP TABLE IF EXISTS site_audit_images;
 
 CREATE TABLE IF NOT EXISTS site_audit_images (
     id SERIAL PRIMARY KEY,
@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS site_audit_images (
 );
 
 -- Drop and recreate scraping_jobs table
-DROP TABLE IF EXISTS scraping_jobs;
+--DROP TABLE IF EXISTS scraping_jobs;
 
 CREATE TABLE IF NOT EXISTS scraping_jobs (
     id SERIAL PRIMARY KEY,
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS scraping_jobs (
 );
 
 -- Drop and recreate analytics_accounts table
-DROP TABLE IF EXISTS analytics_accounts;
+--DROP TABLE IF EXISTS analytics_accounts;
 
 CREATE TABLE IF NOT EXISTS analytics_accounts (
     id SERIAL PRIMARY KEY,
@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS analytics_accounts (
 );
 
 -- Drop and recreate backlink_websites table
-DROP TABLE IF EXISTS backlink_websites;
+--DROP TABLE IF EXISTS backlink_websites;
 
 CREATE TABLE IF NOT EXISTS backlink_websites (
     id SERIAL PRIMARY KEY,
@@ -227,7 +227,7 @@ CREATE TABLE IF NOT EXISTS backlink_websites (
 );
 
 -- Drop and recreate backlinks table
-DROP TABLE IF EXISTS backlinks;
+--DROP TABLE IF EXISTS backlinks;
 
 CREATE TABLE IF NOT EXISTS backlinks (
     id SERIAL PRIMARY KEY,
@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS backlinks (
 );
 
 -- Drop and recreate search_console_sites table
-DROP TABLE IF EXISTS search_console_sites;
+--DROP TABLE IF EXISTS search_console_sites;
 
 CREATE TABLE IF NOT EXISTS search_console_sites (
     id SERIAL PRIMARY KEY,
@@ -256,7 +256,7 @@ CREATE TABLE IF NOT EXISTS search_console_sites (
     fetched_by VARCHAR(255)
 );
 -- Drop and recreate settings table
-DROP TABLE IF EXISTS settings;
+--DROP TABLE IF EXISTS settings;
 
 CREATE TABLE IF NOT EXISTS settings (
     key VARCHAR(255) NOT NULL,
@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- Drop and recreate websites_monitor table
-DROP TABLE IF EXISTS websites_monitor;
+--DROP TABLE IF EXISTS websites_monitor;
 
 CREATE TABLE IF NOT EXISTS websites_monitor (
     id SERIAL PRIMARY KEY,
@@ -276,7 +276,7 @@ CREATE TABLE IF NOT EXISTS websites_monitor (
 );
 
 -- Drop and recreate websites_monitor_history table
-DROP TABLE IF EXISTS websites_monitor_history;
+--DROP TABLE IF EXISTS websites_monitor_history;
 
 CREATE TABLE IF NOT EXISTS websites_monitor_history (
     id SERIAL PRIMARY KEY,
