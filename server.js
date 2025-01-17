@@ -782,7 +782,9 @@ app.get("/oauth2callback", async (req, res) => {
     console.log("Access token saved to database:", savedToken);
 
     // Redirect to the desired page
-    res.redirect("http://localhost:3000/dashboard/searchconsole");
+    res.redirect(
+      "https://domain-rank-client.vercel.app/dashboard/searchconsole"
+    );
   } catch (error) {
     console.error("Error during OAuth2 callback:", error);
     res.status(500).send("Authentication failed");
