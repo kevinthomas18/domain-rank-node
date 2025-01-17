@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users
     password text COLLATE pg_catalog."default",
     CONSTRAINT users_pkey PRIMARY KEY (id),
     CONSTRAINT users_email_key UNIQUE (email)
-)
+);
 
 CREATE TABLE IF NOT EXISTS auth_users (
 id integer NOT NULL DEFAULT nextval('auth_users_id_seq'::regclass),
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS projects
         ON UPDATE NO ACTION
         ON DELETE NO ACTION,
     CONSTRAINT projects_status_check CHECK (status = ANY (ARRAY['Active'::text, 'Inactive'::text]))
-)
+);
 
  DROP TABLE IF EXISTS keywords;
 
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS keywords
         ON UPDATE NO ACTION
         ON DELETE NO ACTION,
     CONSTRAINT keywords_status_check CHECK (status = ANY (ARRAY['Active'::text, 'Inactive'::text]))
-)
+);
 
  DROP TABLE IF EXISTS rankhistory;
 
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS rankhistory
         REFERENCES public.keywords (id) MATCH SIMPLE
         ON UPDATE NO ACTION
         ON DELETE NO ACTION
-)
+);
 
  DROP TABLE IF EXISTS websites;
 
@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS websites
         ON UPDATE NO ACTION
         ON DELETE NO ACTION,
     CONSTRAINT websites_status_check CHECK (status = ANY (ARRAY['Active'::text, 'Inactive'::text]))
-)
+);
 
  DROP TABLE IF EXISTS keyword_website_mapping;
 
@@ -136,9 +136,9 @@ CREATE TABLE IF NOT EXISTS keyword_website_mapping
         REFERENCES public.websites (id) MATCH SIMPLE
         ON UPDATE NO ACTION
         ON DELETE NO ACTION
-)
+);
 
- DROP TABLE IF EXISTS .site_audits;
+ DROP TABLE IF EXISTS site_audits;
 
 CREATE TABLE IF NOT EXISTS site_audits
 (
@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS site_audits
         ON UPDATE NO ACTION
         ON DELETE CASCADE,
     CONSTRAINT site_audits_audit_status_check CHECK (audit_status = ANY (ARRAY['Not started'::text, 'In progress'::text, 'Completed'::text]))
-)
+);
 
  DROP TABLE IF EXISTS site_audit_pages;
 
@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS site_audit_pages
         ON UPDATE NO ACTION
         ON DELETE CASCADE,
     CONSTRAINT site_audit_pages_crawl_status_check CHECK (crawl_status = ANY (ARRAY['Not started'::text, 'Completed'::text]))
-)
+);
 
  DROP TABLE IF EXISTS site_audit_images;
 
@@ -209,7 +209,7 @@ CREATE TABLE IF NOT EXISTS site_audit_images
         ON UPDATE NO ACTION
         ON DELETE CASCADE,
     CONSTRAINT site_audit_images_crawl_status_check CHECK (crawl_status = ANY (ARRAY['Not started'::text, 'Completed'::text]))
-)
+);
 
  DROP TABLE IF EXISTS scraping_jobs;
 
@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS scraping_jobs
         REFERENCES public.websites (id) MATCH SIMPLE
         ON UPDATE NO ACTION
         ON DELETE CASCADE
-)
+);
 
 
  DROP TABLE IF EXISTS analytics_accounts;
@@ -245,7 +245,7 @@ CREATE TABLE IF NOT EXISTS analytics_accounts
     first_fetched_date timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     project_id integer NOT NULL,
     CONSTRAINT analytics_accounts_pkey PRIMARY KEY (id)
-)
+);
 
  DROP TABLE IF EXISTS backlink_websites;
 
@@ -261,7 +261,7 @@ CREATE TABLE IF NOT EXISTS backlink_websites
     created_date timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     created_by character varying(255) COLLATE pg_catalog."default",
     CONSTRAINT backlink_websites_pkey PRIMARY KEY (id)
-)
+);
 
  DROP TABLE IF EXISTS backlinks;
 
@@ -282,7 +282,7 @@ CREATE TABLE IF NOT EXISTS backlinks
     CONSTRAINT backlinks_pkey PRIMARY KEY (id),
     CONSTRAINT backlinks_link_type_check CHECK (link_type::text = ANY (ARRAY['Text'::character varying, 'Image'::character varying, 'Button'::character varying, 'Video'::character varying]::text[])),
     CONSTRAINT backlinks_source_check CHECK (source::text = ANY (ARRAY['Manual'::character varying, 'Search Console'::character varying, 'Google Analytics'::character varying]::text[]))
-)
+);
 
 
  DROP TABLE IF EXISTS search_console_sites;
@@ -295,7 +295,7 @@ CREATE TABLE IF NOT EXISTS search_console_sites
     fetched_by character varying(255) COLLATE pg_catalog."default",
     CONSTRAINT search_console_sites_pkey PRIMARY KEY (id),
     CONSTRAINT search_console_sites_site_name_key UNIQUE (site_name)
-)
+);
 
  DROP TABLE IF EXISTS settings;
 
@@ -305,7 +305,7 @@ CREATE TABLE IF NOT EXISTS settings
     value text COLLATE pg_catalog."default" NOT NULL,
     date timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT settings_pkey PRIMARY KEY (key)
-)
+);
  DROP TABLE IF EXISTS websites_monitor;
 
 CREATE TABLE IF NOT EXISTS websites_monitor
@@ -315,7 +315,7 @@ CREATE TABLE IF NOT EXISTS websites_monitor
     url text COLLATE pg_catalog."default" NOT NULL,
     last_check_time timestamp without time zone,
     CONSTRAINT websites_monitor_pkey PRIMARY KEY (id)
-)
+);
 
 
  DROP TABLE IF EXISTS websites_monitor_history;
@@ -332,7 +332,7 @@ CREATE TABLE IF NOT EXISTS websites_monitor_history
         ON UPDATE NO ACTION
         ON DELETE NO ACTION,
     CONSTRAINT websites_monitor_history_status_check CHECK (status::text = ANY (ARRAY['Success'::character varying, 'Fail'::character varying, 'Slow'::character varying]::text[]))
-)
+);
 
 
 -- -- Recreate tables
