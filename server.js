@@ -30,6 +30,8 @@ const SECRET_KEY = process.env.SECRET_KEY;
 const session = require("express-session");
 
 const pool = require("./config/db");
+
+const cron = require("node-cron");
 //const fs = require("fs");
 
 // const http = require("http");
@@ -760,7 +762,6 @@ app.post("/api/analytics/traffic-by-date", async (req, res) => {
   }
 });
 
-
 app.get("/oauth2callback", async (req, res) => {
   const { code } = req.query;
 
@@ -1391,6 +1392,402 @@ app.delete("/analyticsaccount/remove", verifyToken, async (req, res) => {
   } catch (error) {
     console.error("Error deleting Account:", error);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Create a new backlink website record
+app.post("/backlinks_website", async (req, res) => {
+  const {
+    Project_id,
+    Website_name,
+    URL,
+    User_id,
+    Password,
+    Remarks,
+    Created_by,
+  } = req.body;
+
+  const query = `
+    INSERT INTO Backlink_websites 
+    (Project_id, Website_name, URL, User_id, Password, Remarks, Created_by)
+    VALUES ($1, $2, $3, $4, $5, $6, $7) 
+    RETURNING *;
+  `;
+
+  try {
+    const client = await pool.connect();
+    const result = await client.query(query, [
+      Project_id,
+      Website_name,
+      URL,
+      User_id,
+      Password,
+      Remarks,
+      Created_by,
+    ]);
+    res.status(201).json(result.rows[0]);
+    client.release();
+  } catch (error) {
+    console.error("Error inserting backlink:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Get all backlink website records
+app.get("/backlinks_website", async (req, res) => {
+  const query = `SELECT * FROM Backlink_websites;`;
+
+  try {
+    const client = await pool.connect();
+    const result = await client.query(query);
+    res.json(result.rows);
+    client.release();
+  } catch (error) {
+    console.error("Error fetching backlinks:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Get a single backlink website record by ID
+app.get("/backlinks_website/:id", async (req, res) => {
+  const { id } = req.params;
+  const query = `SELECT * FROM Backlink_websites WHERE Id = $1;`;
+
+  try {
+    const client = await pool.connect();
+    const result = await client.query(query, [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Record not found" });
+    }
+    res.json(result.rows[0]);
+    client.release();
+  } catch (error) {
+    console.error("Error fetching backlink:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Update a backlink website record by ID
+app.put("/backlinks_website/:id", async (req, res) => {
+  const { id } = req.params;
+  const {
+    Project_id,
+    Website_name,
+    URL,
+    User_id,
+    Password,
+    Remarks,
+    Created_by,
+  } = req.body;
+
+  const query = `
+    UPDATE Backlink_websites 
+    SET 
+      Project_id = $1,
+      Website_name = $2,
+      URL = $3,
+      User_id = $4,
+      Password = $5,
+      Remarks = $6,
+      Created_by = $7
+    WHERE Id = $8 
+    RETURNING *;
+  `;
+
+  try {
+    const client = await pool.connect();
+    const result = await client.query(query, [
+      Project_id,
+      Website_name,
+      URL,
+      User_id,
+      Password,
+      Remarks,
+      Created_by,
+      id,
+    ]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Record not found" });
+    }
+    res.json(result.rows[0]);
+    client.release();
+  } catch (error) {
+    console.error("Error updating backlink:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Delete a backlink website record by ID
+app.delete("/backlinks_website/:id", async (req, res) => {
+  const { id } = req.params;
+  const query = `DELETE FROM Backlink_websites WHERE Id = $1 RETURNING *;`;
+
+  try {
+    const client = await pool.connect();
+    const result = await client.query(query, [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Record not found" });
+    }
+    res.json({ message: "Record deleted successfully" });
+    client.release();
+  } catch (error) {
+    console.error("Error deleting backlink:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Get all backlinks
+app.get("/api/backlinks", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM Backlinks");
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching backlinks:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Get a single backlink by ID
+app.get("/api/backlinks/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query("SELECT * FROM Backlinks WHERE Id = $1", [
+      id,
+    ]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Backlink not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("Error fetching backlink:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Create a new backlink
+app.post("/api/backlinks", async (req, res) => {
+  const {
+    Project_id,
+    Link_from,
+    Link_to,
+    Anchor_text,
+    Do_follow,
+    Source,
+    Link_type,
+    Remarks,
+    Created_by,
+    Last_checked_date,
+  } = req.body;
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO Backlinks (
+        Project_id, Link_from, Link_to, Anchor_text, Do_follow, Source, Link_type, Remarks, Created_date, Created_by, Last_checked_date
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, $9, $10) RETURNING *`,
+      [
+        Project_id,
+        Link_from,
+        Link_to,
+        Anchor_text,
+        Do_follow,
+        Source,
+        Link_type,
+        Remarks,
+        Created_by,
+        Last_checked_date,
+      ]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("Error creating backlink:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Update an existing backlink
+app.put("/api/backlinks/:id", async (req, res) => {
+  const { id } = req.params;
+  const {
+    Project_id,
+    Link_from,
+    Link_to,
+    Anchor_text,
+    Do_follow,
+    Source,
+    Link_type,
+    Remarks,
+    Created_by,
+    Last_checked_date,
+  } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE Backlinks
+       SET Project_id = $1,
+           Link_from = $2,
+           Link_to = $3,
+           Anchor_text = $4,
+           Do_follow = $5,
+           Source = $6,
+           Link_type = $7,
+           Remarks = $8,
+           Created_by = $9,
+           Last_checked_date = $10
+       WHERE Id = $11 RETURNING *`,
+      [
+        Project_id,
+        Link_from,
+        Link_to,
+        Anchor_text,
+        Do_follow,
+        Source,
+        Link_type,
+        Remarks,
+        Created_by,
+        Last_checked_date,
+        id,
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Backlink not found" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("Error updating backlink:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Delete a backlink
+app.delete("/api/backlinks/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      "DELETE FROM Backlinks WHERE Id = $1 RETURNING *",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Backlink not found" });
+    }
+
+    res.json({
+      message: "Backlink deleted successfully",
+      deleted: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error deleting backlink:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Add a website to monitor
+app.post("/monitor/websites", async (req, res) => {
+  const { Site_name, URL } = req.body;
+
+  const query = `
+    INSERT INTO Websites_Monitor (Site_name, URL)
+    VALUES ($1, $2)
+    RETURNING *;
+  `;
+
+  try {
+    const result = await pool.query(query, [Site_name, URL]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("Error adding website:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Get all monitored websites
+app.get("/monitor/websites_history", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM Websites_Monitor_history;");
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching websites:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+app.get("/monitor/websites", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM Websites_Monitor;");
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching websites:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Get website history
+app.get("/websites/:id/history", async (req, res) => {
+  const { id } = req.params;
+
+  const query = `
+    SELECT * 
+    FROM Websites_Monitor_History 
+    WHERE Site_id = $1
+    ORDER BY Check_time DESC;
+  `;
+
+  try {
+    const result = await pool.query(query, [id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching website history:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Cron job to ping websites every 15 minutes
+cron.schedule("*/15 * * * *", async () => {
+  console.log("Pinging websites...");
+
+  const query = `SELECT * FROM Websites_Monitor;`;
+
+  try {
+    const { rows: websites } = await pool.query(query);
+
+    for (const website of websites) {
+      const { id, url } = website;
+      let status = "Fail";
+
+      try {
+        const startTime = Date.now();
+        const response = await axios.get(url, { timeout: 5000 });
+        const responseTime = Date.now() - startTime;
+
+        // Determine status based on response
+        if (response.status === 200) {
+          status = responseTime < 2000 ? "Success" : "Slow";
+        }
+      } catch (error) {
+        console.error(`Error pinging ${url}:`, error.message);
+      }
+
+      // Insert history record
+      const insertHistoryQuery = `
+        INSERT INTO websites_monitor_history (site_id, status)
+        VALUES ($1, $2);
+      `;
+      await pool.query(insertHistoryQuery, [id, status]);
+
+      // Update last check time
+      const updateMonitorQuery = `
+        UPDATE websites_monitor
+        SET Last_check_time = CURRENT_TIMESTAMP
+        WHERE id = $1;
+      `;
+      await pool.query(updateMonitorQuery, [id]);
+
+      console.log(`Checked ${url} - Status: ${status}`);
+    }
+  } catch (error) {
+    console.error("Error during website check:", error.message);
   }
 });
 
