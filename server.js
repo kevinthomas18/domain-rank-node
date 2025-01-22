@@ -33,7 +33,7 @@ const pool = require("./config/db");
 
 const cron = require("node-cron");
 
-// const fs = require("fs");
+const fs = require("fs");
 
 // const schemaSQL = fs.readFileSync("schema.sql", "utf8");
 
@@ -80,6 +80,7 @@ app.use(
 app.use(express.json({ limit: "50mb" }));
 
 const { google } = require("googleapis");
+const readline = require("readline");
 const { oauth2Client, authUrl, setCredentials } = require("./auth");
 
 // Middleware to verify JWT and extract the `created_by` value
@@ -98,6 +99,171 @@ const verifyToken = (req, res, next) => {
     res.status(401).json({ error: "Invalid or expired token..." });
   }
 };
+
+// test start google business
+const SCOPES = [
+  "https://www.googleapis.com/auth/webmasters",
+  "https://www.googleapis.com/auth/webmasters.readonly",
+  "https://www.googleapis.com/auth/business.manage",
+  "https://www.googleapis.com/auth/plus.business.manage",
+];
+
+const TOKEN_PATH = "token.json"; // Save the access token for reuse
+
+// Load client secrets from a local file.
+fs.readFile("credentials.json", (err, content) => {
+  if (err) return console.error("Error loading client secret file:", err);
+  authorize(JSON.parse(content), listBusinessProfiles);
+});
+
+function authorize(credentials, callback) {
+  // Access the `web` property instead of `installed`
+  const { client_id, client_secret, redirect_uris } = credentials.web;
+  const oAuth2Client = new google.auth.OAuth2(
+    client_id,
+    client_secret,
+    redirect_uris[0]
+  );
+
+  // Check if the token already exists
+  fs.readFile(TOKEN_PATH, (err, token) => {
+    if (err) return getNewToken(oAuth2Client, callback);
+    oAuth2Client.setCredentials(JSON.parse(token));
+    callback(oAuth2Client);
+  });
+}
+
+function getNewToken(oAuth2Client, callback) {
+  const authUrl = oAuth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: SCOPES,
+  });
+  console.log("Authorize this app by visiting this url:", authUrl);
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  rl.question("Enter the code from that page here: ", (code) => {
+    rl.close();
+    oAuth2Client.getToken(code, (err, token) => {
+      if (err) return console.error("Error retrieving access token", err);
+      oAuth2Client.setCredentials(token);
+      // Store the token to disk for later use.
+      fs.writeFile(TOKEN_PATH, JSON.stringify(token), (err) => {
+        if (err) console.error(err);
+        console.log("Token stored to", TOKEN_PATH);
+      });
+      callback(oAuth2Client);
+    });
+  });
+}
+// async function listBusinessProfiles(oAuth2Client) {
+//   try {
+//     const mybusiness = google.mybusinessaccountmanagement({
+//       version: "v1",
+//       auth: oAuth2Client,
+//     });
+
+//     // Use the 'accounts.list()' method to list business profiles
+//     const res = await mybusiness.accounts.list({});
+//     console.log(res.data, "res.....");
+
+//     const accounts = res.data.accounts || [];
+//     if (accounts.length) {
+//       console.log("Business Profiles:");
+//       accounts.forEach((account) => {
+//         console.log(
+//           `- Name: ${account.name}, Account ID: ${account.accountId}`
+//         );
+//       });
+//     } else {
+//       console.log("No Business Profiles found.");
+//     }
+//   } catch (error) {
+//     console.error("Error retrieving business profiles:", error);
+//   }
+// }
+
+async function listBusinessProfiles() {
+  try {
+    // Step 1: Fetch the access token from the database
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const tokenResult = await pool.query(query, values);
+
+    // If no access token is found, log an error and return
+    if (tokenResult.rows.length === 0) {
+      console.error("No access token found. Unauthorized access.");
+      return;
+    }
+
+    const accessToken = tokenResult.rows[0].access_token;
+
+    // Step 2: Set credentials using the access token
+    const oauth2Client = new google.auth.OAuth2();
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    // Step 3: Initialize the Google My Business API client
+    const mybusiness = google.mybusinessaccountmanagement({
+      version: "v1",
+      auth: oauth2Client,
+    });
+
+    // Step 4: Fetch business profiles
+    const res = await mybusiness.accounts.list();
+    const accounts = res.data.accounts || [];
+
+    if (accounts.length) {
+      console.log("Business Profiles:");
+      accounts.forEach((account) => {
+        console.log(
+          `- Name: ${account.name}, Account ID: ${account.accountId}`
+        );
+      });
+    } else {
+      console.log("No Business Profiles found.");
+    }
+  } catch (error) {
+    console.error("Error retrieving business profiles:", error.message);
+  }
+}
+
+app.get("/api/business/profiles/test", async (req, res) => {
+  try {
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const token = await pool.query(query, values);
+
+    // If no access token is found, respond with Unauthorized error
+    if (token.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = token.rows[0].access_token;
+
+    // Set credentials using the access token from the database
+    const oAuth2Client = new google.auth.OAuth2();
+    oAuth2Client.setCredentials({ access_token: accessToken });
+
+    // Call the function to list business profiles
+    await listBusinessProfiles(oAuth2Client);
+
+    res.json({ message: "Business profiles fetched successfully." });
+  } catch (error) {
+    console.error("Error fetching business profiles:", error.message);
+    res.status(500).json({ error: "Failed to fetch business profiles" });
+  }
+});
+
+// test end google business
 
 app.get("/api/analytics/properties", async (req, res) => {
   try {
@@ -782,9 +948,7 @@ app.get("/oauth2callback", async (req, res) => {
     console.log("Access token saved to database:", savedToken);
 
     // Redirect to the desired page
-    res.redirect(
-      "https://domain-rank-client.vercel.app/dashboard/searchconsole"
-    );
+    res.redirect("http://localhost:3000/dashboard/searchconsole");
   } catch (error) {
     console.error("Error during OAuth2 callback:", error);
     res.status(500).send("Authentication failed");
@@ -1755,7 +1919,7 @@ cron.schedule("*/15 * * * *", async () => {
 
         // Determine status based on response
         if (response.status === 200) {
-          status = responseTime < 2000 ? "Success" : "Slow";
+          status = responseTime < 3000 ? "Success" : "Slow";
         }
       } catch (error) {
         console.error(`Error pinging ${url}:`, error.message);
@@ -1799,8 +1963,9 @@ function generateOTP() {
 }
 
 //Add a New User
-app.post("/add-auth-user", async (req, res) => {
-  const { name, email, userType, createdById } = req.body;
+app.post("/add-auth-user", verifyToken, async (req, res) => {
+  const { name, email, userType, status = "active" } = req.body;
+  const { id: createdById } = req.user;
 
   if (!name || !email || !userType) {
     return res
@@ -1810,20 +1975,22 @@ app.post("/add-auth-user", async (req, res) => {
 
   try {
     const insertQuery = `
-      INSERT INTO auth_users (name, email, user_type, created_by_id) 
-      VALUES ($1, $2, $3, $4) 
-      RETURNING id
+      INSERT INTO auth_users (name, email, user_type, status, created_by_id) 
+      VALUES ($1, $2, $3, $4, $5) 
+      RETURNING id, name, email, user_type, status
     `;
     const result = await pool.query(insertQuery, [
       name,
       email,
       userType,
+      status,
       createdById || null,
     ]);
 
-    const userId = result.rows[0].id;
-    res.status(200).json({ message: "User added successfully", userId });
+    const newUser = result.rows[0]; // Extract the newly created user's details
+    res.status(200).json({ message: "User added successfully", user: newUser });
   } catch (error) {
+    console.error("Error adding user:", error);
     res
       .status(500)
       .json({ message: "Failed to add user", error: error.message });
@@ -1833,7 +2000,7 @@ app.post("/add-auth-user", async (req, res) => {
 //Request OTP
 app.post("/request-auth-otp", async (req, res) => {
   const { email } = req.body;
-  console.log(email);
+  
 
   if (!email) {
     return res.status(400).json({ message: "Email is required" });
@@ -1940,32 +2107,151 @@ app.post("/verify-otp", async (req, res) => {
   }
 });
 
-// Example route to get user info (protected with JWT)
-app.get("/profile", async (req, res) => {
-  const token = req.headers.authorization?.split(" ")[1];
+app.get("/get-all-users",verifyToken, async (req, res) => {
+  try {
+    const selectQuery = `
+      SELECT id, name, email, user_type, created_by_id,status
+      FROM auth_users
+    `;
 
-  if (!token) {
-    return res.status(401).json({ error: "Access denied" });
+    const result = await pool.query(selectQuery);
+    const users = result.rows;
+
+    res.status(200).json({ message: "Users fetched successfully", users });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to fetch users", error: error.message });
+  }
+});
+
+app.put("/edit-auth-user/:id", verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const { name, email, user_type, status } = req.body;
+
+  if (!name && !email && !user_type && !status) {
+    return res.status(400).json({ message: "No fields to update" });
   }
 
   try {
-    // Verify the token and decode it
-    const decoded = jwt.verify(token, SECRET_KEY);
+    const fields = [];
+    const values = [];
+    let counter = 1;
 
-    // Fetch the user details from the database
+    if (name) {
+      fields.push(`name = $${counter}`);
+      values.push(name);
+      counter++;
+    }
+    if (email) {
+      fields.push(`email = $${counter}`);
+      values.push(email);
+      counter++;
+    }
+    if (user_type) {
+      fields.push(`user_type = $${counter}`);
+      values.push(user_type);
+      counter++;
+    }
+    if (status) {
+      fields.push(`status = $${counter}`);
+      values.push(status);
+      counter++;
+    }
+
+    values.push(id); // Add user ID as the last value
+
+    const updateQuery = `
+      UPDATE auth_users 
+      SET ${fields.join(", ")} 
+      WHERE id = $${counter}
+      RETURNING id
+    `;
+
+    const result = await pool.query(updateQuery, values);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json({ message: "User updated successfully" });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to update user", error: error.message });
+  }
+});
+
+app.delete("/delete-auth-user/:id", verifyToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const deleteQuery = `
+      DELETE FROM auth_users 
+      WHERE id = $1 
+      RETURNING id
+    `;
+
+    const result = await pool.query(deleteQuery, [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json({ message: "User deleted successfully" });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to delete user", error: error.message });
+  }
+});
+
+// Example route to get user info (protected with JWT)
+app.get("/profile", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.user;
+
     const query =
       "SELECT id, name, email, user_type FROM auth_users WHERE id = $1";
-    const result = await pool.query(query, [decoded.id]);
+    const result = await pool.query(query, [id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Return the user's profile data
     const user = result.rows[0];
     res.json({ message: "Protected data", user });
   } catch (error) {
     res.status(401).json({ error: "Invalid or expired token" });
+  }
+});
+
+// API to assign a project to a user
+app.post('/assign-project',verifyToken, async (req, res) => {
+  const { user_id, project_id } = req.body;
+  const { id: assigned_by } = req.user;
+
+  // Validate input
+  if (!user_id || !project_id || !assigned_by) {
+    return res.status(400).json({ error: 'user_id, project_id, and assigned_by are required' });
+  }
+
+  try {
+    const query = `
+      INSERT INTO user_project_assignments (user_id, project_id, assigned_by)
+      VALUES ($1, $2, $3)
+      RETURNING *;
+    `;
+
+    const result = await pool.query(query, [user_id, project_id, assigned_by]);
+
+    res.status(201).json({
+      message: 'Project assigned successfully',
+      assignment: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Error assigning project:', error);
+    res.status(500).json({ error: 'Failed to assign project' });
   }
 });
 
