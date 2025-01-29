@@ -35,6 +35,8 @@ const cron = require("node-cron");
 
 const fs = require("fs");
 
+const dns = require("dns");
+
 // const schemaSQL = fs.readFileSync("schema.sql", "utf8");
 
 // pool.query(schemaSQL, (err, res) => {
@@ -45,25 +47,6 @@ const fs = require("fs");
 //   }
 //   pool.end();
 // });
-
-// const getUsers = async () => {
-//   try {
-//     const res = await pool.query("SELECT * FROM auth_users");
-//     console.log(res.rows); // Logs the query result
-//   } catch (err) {
-//     console.error("Error executing query", err.stack);
-//   }
-// };
-
-// getUsers();
-
-app.use(
-  cors({
-    origin: ["http://localhost:3000", "https://domain-rank-client.vercel.app"],
-    methods: "GET,POST,PUT,PATCH,DELETE",
-    credentials: true,
-  })
-);
 
 // Set up session middleware
 app.use(
@@ -79,9 +62,19 @@ app.use(
 //app.use(express.json());
 app.use(express.json({ limit: "50mb" }));
 
+const openaiApiKey = process.env.OPENAI_API_KEY;
+
 const { google } = require("googleapis");
 const readline = require("readline");
 const { oauth2Client, authUrl, setCredentials } = require("./auth");
+
+app.use(
+  cors({
+    origin: ["http://localhost:3000", "https://domain-rank-client.vercel.app"],
+    methods: "GET,POST,PUT,PATCH,DELETE",
+    credentials: true,
+  })
+);
 
 // Middleware to verify JWT and extract the `created_by` value
 const verifyToken = (req, res, next) => {
@@ -99,22 +92,6 @@ const verifyToken = (req, res, next) => {
     res.status(401).json({ error: "Invalid or expired token..." });
   }
 };
-
-// test start google business
-const SCOPES = [
-  "https://www.googleapis.com/auth/webmasters",
-  "https://www.googleapis.com/auth/webmasters.readonly",
-  "https://www.googleapis.com/auth/business.manage",
-  "https://www.googleapis.com/auth/plus.business.manage",
-];
-
-const TOKEN_PATH = "token.json"; // Save the access token for reuse
-
-// Load client secrets from a local file.
-fs.readFile("credentials.json", (err, content) => {
-  if (err) return console.error("Error loading client secret file:", err);
-  authorize(JSON.parse(content), listBusinessProfiles);
-});
 
 function authorize(credentials, callback) {
   // Access the `web` property instead of `installed`
@@ -184,51 +161,303 @@ function getNewToken(oAuth2Client, callback) {
 //   }
 // }
 
-async function listBusinessProfiles() {
-  try {
-    // Step 1: Fetch the access token from the database
-    const query = `
-      SELECT value AS access_token
-      FROM settings
-      WHERE key = $1;
-    `;
-    const values = ["search console access token"];
-    const tokenResult = await pool.query(query, values);
+// Function to fetch Google My Business API access token from the database
+async function fetchAccessToken() {
+  const query = `
+  SELECT value AS access_token
+  FROM settings
+  WHERE key = $1;
+`;
+  const values = ["search console access token"];
+  const tokenResult = await pool.query(query, values);
 
-    // If no access token is found, log an error and return
-    if (tokenResult.rows.length === 0) {
-      console.error("No access token found. Unauthorized access.");
+  // If no access token is found, log an error and return
+  if (tokenResult.rows.length === 0) {
+    console.error("No access token found. Unauthorized access.");
+    return;
+  }
+
+  const accessToken = tokenResult.rows[0].access_token;
+  return accessToken;
+}
+
+// Function to initialize Google My Business API client
+function createGMBClient(accessToken) {
+  const oauth2Client = new google.auth.OAuth2();
+  oauth2Client.setCredentials({ access_token: accessToken });
+
+  return google.mybusinessaccountmanagement({
+    version: "v1",
+    auth: oauth2Client,
+  });
+}
+
+// Function to fetch list of accounts
+async function fetchAccounts(client) {
+  try {
+    const response = await client.accounts.list();
+    const accounts = response.data.accounts || [];
+    return accounts.map((account) => ({
+      accountName: account.name,
+      accountId: account.name.split("/")[1], // Extract account ID from "accounts/{accountId}"
+    }));
+  } catch (error) {
+    console.error("Error fetching accounts:", error.message);
+    throw error;
+  }
+}
+
+// Function to fetch locations for a specific account
+async function fetchLocations(client, accountId) {
+  try {
+    const response = await client.locations.list({
+      parent: `accounts/${accountId}`,
+    });
+    const locations = response.data.locations || [];
+    return locations.map((location) => ({
+      name: location.name,
+      address: location.address,
+      phoneNumber: location.primaryPhone,
+      websiteUrl: location.websiteUrl,
+    }));
+  } catch (error) {
+    console.error("Error fetching locations:", error.message);
+    throw error;
+  }
+}
+
+// API endpoint to fetch locations
+app.get("/api/google-my-business/locations", async (req, res) => {
+  try {
+    // Step 1: Fetch access token from the database
+    const accessToken = await fetchAccessToken();
+
+    // Step 2: Initialize the Google My Business API client
+    const client = createGMBClient(accessToken);
+
+    // Step 3: Fetch accounts
+    const accounts = await fetchAccounts(client);
+
+    if (accounts.length === 0) {
+      res.status(404).json({ error: "No accounts found" });
       return;
     }
 
-    const accessToken = tokenResult.rows[0].access_token;
+    // Assuming you want to get locations for the first account
+    const accountId = accounts[0].accountId;
 
-    // Step 2: Set credentials using the access token
+    // Step 4: Fetch locations for the account
+    const locations = await fetchLocations(client, accountId);
+
+    // Step 5: Respond with the list of locations
+    res.json({ locations });
+  } catch (error) {
+    console.error("Error fetching locations:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+//new test start
+async function listLocations(oauth2Client, accountName) {
+  const mybusinessInformation = google.mybusinessbusinessinformation({
+    version: "v1",
+    auth: oauth2Client,
+  });
+
+  try {
+    const res = await mybusinessInformation.accounts.locations.list({
+      parent: accountName, // This should be in the form "accounts/{accountId}"
+    });
+    return res.data.locations || [];
+  } catch (error) {
+    console.error("Error retrieving locations:", error.message);
+    throw error;
+  }
+}
+
+// Express route handler
+app.get("/api/business/profiles/details", async (req, res) => {
+  try {
+    const query = `SELECT value AS access_token FROM settings WHERE key = $1;`;
+    const values = ["search console access token"];
+    const tokenResult = await pool.query(query, values);
+
+    if (tokenResult.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = tokenResult.rows[0].access_token;
     const oauth2Client = new google.auth.OAuth2();
     oauth2Client.setCredentials({ access_token: accessToken });
 
-    // Step 3: Initialize the Google My Business API client
-    const mybusiness = google.mybusinessaccountmanagement({
-      version: "v1",
-      auth: oauth2Client,
+    const profiles = await listBusinessProfiles(oauth2Client);
+
+    const profileDetails = [];
+    for (const profile of profiles) {
+      const accountName = profile.name;
+
+      // Skip accounts that are not LOCATION_GROUP or ORGANIZATION
+      if (
+        profile.type !== "LOCATION_GROUP" &&
+        profile.type !== "ORGANIZATION"
+      ) {
+        console.log(`Skipping account ${accountName} (type: ${profile.type})`);
+        continue;
+      }
+
+      try {
+        const locations = await listLocations(oauth2Client, accountName);
+        profileDetails.push({
+          accountName,
+          account: profile,
+          locations,
+        });
+      } catch (err) {
+        console.error(
+          `Error fetching locations for account ${accountName}:`,
+          err.message
+        );
+      }
+    }
+
+    res.json({ profileDetails });
+  } catch (error) {
+    console.error("Error fetching detailed profiles:", error.message);
+    res.status(500).json({ error: "Failed to fetch detailed profiles" });
+  }
+});
+
+//new test end
+
+async function listBusinessProfiles(oauth2Client) {
+  const mybusiness = google.mybusinessaccountmanagement({
+    version: "v1",
+    auth: oauth2Client,
+  });
+
+  try {
+    const res = await mybusiness.accounts.list();
+    return res.data.accounts || [];
+  } catch (error) {
+    console.error("Error retrieving business profiles:", error);
+    throw {
+      status: error.code || 500,
+      message: "Failed to retrieve business profiles",
+      errors: error.errors,
+    };
+  }
+}
+
+async function getLocations(oauth2Client, accountName) {
+  const mybusiness = google.mybusinessbusinessinformation({
+    version: "v1",
+    auth: oauth2Client,
+  });
+
+  try {
+    const res = await mybusiness.accounts.locations.list({
+      parent: accountName,
+      readMask:
+        "name,title,storefrontAddress,websiteUri,regularHours,specialHours",
+      pageSize: 100,
     });
 
-    // Step 4: Fetch business profiles
-    const res = await mybusiness.accounts.list();
-    const accounts = res.data.accounts || [];
-
-    if (accounts.length) {
-      console.log("Business Profiles:");
-      accounts.forEach((account) => {
-        console.log(
-          `- Name: ${account.name}, Account ID: ${account.accountId}`
-        );
-      });
-    } else {
-      console.log("No Business Profiles found.");
-    }
+    return res.data.locations || [];
   } catch (error) {
-    console.error("Error retrieving business profiles:", error.message);
+    console.error("Error fetching locations:", error);
+    throw {
+      status: error.code || 500,
+      message: "Failed to fetch locations",
+      errors: error.errors,
+    };
+  }
+}
+
+async function getGeneralInformation(oauth2Client, accountName) {
+  const mybusiness = google.mybusinessaccountmanagement({
+    version: "v1",
+    auth: oauth2Client,
+  });
+
+  try {
+    const res = await mybusiness.accounts.get({
+      name: accountName,
+    });
+    return res.data;
+  } catch (error) {
+    console.error("Error fetching general information:", error);
+    throw {
+      status: error.code || 500,
+      message: "Failed to fetch general information",
+      errors: error.errors,
+    };
+  }
+}
+
+async function getPosts(oauth2Client, locationName) {
+  const mybusiness = google.mybusinessbusinessinformation({
+    version: "v1",
+    auth: oauth2Client,
+  });
+
+  try {
+    const res = await mybusiness.accounts.locations.localPosts.list({
+      parent: locationName,
+      pageSize: 100,
+    });
+
+    return res.data.localPosts || [];
+  } catch (error) {
+    console.error("Error fetching posts:", error);
+    throw {
+      status: error.code || 500,
+      message: "Failed to fetch posts",
+      errors: error.errors,
+    };
+  }
+}
+
+async function getReviews(oauth2Client, locationName) {
+  const mybusiness = google.mybusinessbusinessinformation({
+    version: "v1",
+    auth: oauth2Client,
+  });
+
+  try {
+    const res = await mybusiness.accounts.locations.reviews.list({
+      parent: locationName,
+      pageSize: 100,
+    });
+    return res.data.reviews || [];
+  } catch (error) {
+    console.error("Error fetching reviews:", error);
+    throw {
+      status: error.code || 500,
+      message: "Failed to fetch reviews",
+      errors: error.errors,
+    };
+  }
+}
+
+async function getPhotos(oauth2Client, locationName) {
+  const mybusiness = google.mybusinessbusinessinformation({
+    version: "v1",
+    auth: oauth2Client,
+  });
+
+  try {
+    const res = await mybusiness.accounts.locations.media.list({
+      parent: locationName,
+      pageSize: 100,
+    });
+    return res.data.mediaItems || [];
+  } catch (error) {
+    console.error("Error fetching photos:", error);
+    throw {
+      status: error.code || 500,
+      message: "Failed to fetch photos",
+      errors: error.errors,
+    };
   }
 }
 
@@ -240,26 +469,89 @@ app.get("/api/business/profiles/test", async (req, res) => {
       WHERE key = $1;
     `;
     const values = ["search console access token"];
-    const token = await pool.query(query, values);
+    const tokenResult = await pool.query(query, values);
 
-    // If no access token is found, respond with Unauthorized error
-    if (token.rows.length === 0) {
+    if (tokenResult.rows.length === 0) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const accessToken = token.rows[0].access_token;
+    const accessToken = tokenResult.rows[0].access_token;
+    const oauth2Client = new google.auth.OAuth2();
+    oauth2Client.setCredentials({ access_token: accessToken });
 
-    // Set credentials using the access token from the database
-    const oAuth2Client = new google.auth.OAuth2();
-    oAuth2Client.setCredentials({ access_token: accessToken });
+    const profiles = await listBusinessProfiles(oauth2Client);
 
-    // Call the function to list business profiles
-    await listBusinessProfiles(oAuth2Client);
-
-    res.json({ message: "Business profiles fetched successfully." });
+    res.json({ profiles });
   } catch (error) {
     console.error("Error fetching business profiles:", error.message);
     res.status(500).json({ error: "Failed to fetch business profiles" });
+  }
+});
+
+app.get("/api/business/:accountName/details", async (req, res) => {
+  const accountName = decodeURIComponent(req.params.accountName);
+  console.log("Account Name:", accountName);
+
+  try {
+    // Get access token from database
+    const query = `
+      SELECT value AS access_token
+      FROM settings
+      WHERE key = $1;
+    `;
+    const values = ["search console access token"];
+    const tokenResult = await pool.query(query, values);
+
+    if (tokenResult.rows.length === 0) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const accessToken = tokenResult.rows[0].access_token;
+    const oauth2Client = new google.auth.OAuth2();
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    // First, verify the account exists
+    const accounts = await listBusinessProfiles(oauth2Client);
+    const targetAccount = accounts.find(
+      (account) => account.name === accountName
+    );
+
+    if (!targetAccount) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    // Fetch locations using the correct parent format
+    const locations = await getLocations(oauth2Client, targetAccount.name);
+
+    if (!locations || locations.length === 0) {
+      return res
+        .status(404)
+        .json({ error: "No locations found for this account" });
+    }
+
+    // Use the first location
+    const location = locations[0];
+
+    // Fetch all details in parallel
+    const [generalInfo, posts, reviews, photos] = await Promise.all([
+      getGeneralInformation(oauth2Client, targetAccount.name),
+      getPosts(oauth2Client, location.name),
+      getReviews(oauth2Client, location.name),
+      getPhotos(oauth2Client, location.name),
+    ]);
+
+    res.json({
+      generalInfo,
+      posts,
+      reviews,
+      photos,
+    });
+  } catch (error) {
+    console.error("Error fetching account details:", error);
+    res.status(error.status || 500).json({
+      error: error.message || "Failed to fetch account details",
+      details: error.errors || [],
+    });
   }
 });
 
@@ -399,7 +691,7 @@ app.get("/api/business/profiles", async (req, res) => {
 
 app.post("/api/analytics", async (req, res) => {
   try {
-    const { startDate, endDate, propertyId } = req.body;
+    const { startDate, endDate, propertyId, dimension } = req.body;
 
     if (!propertyId) {
       return res.status(400).json({ error: "Property ID is required" });
@@ -409,6 +701,7 @@ app.post("/api/analytics", async (req, res) => {
     const end = endDate || "today";
     const property_Id = propertyId;
 
+    // Fetch access token from the database
     const query = `
       SELECT value AS access_token
       FROM settings
@@ -430,6 +723,9 @@ app.post("/api/analytics", async (req, res) => {
       auth: oauth2Client,
     });
 
+    // Define the dimension based on the request
+    const selectedDimension = dimension || "sessionDefaultChannelGrouping";
+
     const response = await analyticsData.properties.runReport({
       property: property_Id,
       requestBody: {
@@ -441,51 +737,21 @@ app.post("/api/analytics", async (req, res) => {
           { name: "sessions" },
           { name: "engagedSessions" },
           { name: "bounceRate" },
-          //{ name: "ecommercePurchases" },
-          //{ name: "adClicks" },
-          //{ name: "userKeyEventRate" },
         ],
-        dimensions: [
-          { name: "sessionDefaultChannelGrouping" },
-          //{ name: "sessionSource" },
-          //{ name: "sessionMedium" },
-          //{ name: "city" },
-          //{ name: "deviceCategory" },
-          //{ name: "country" },
-          //{ name: "region" },
-          //{ name: "deviceCategory" },
-          //{ name: "operatingSystem" },
-          //{ name: "language" },
-          //{ name: "browser" },
-          //{ name: "userAgeBracket" },
-          //{ name: "userGender" },
-        ],
+        dimensions: [{ name: selectedDimension }], // Use the selected dimension
       },
     });
 
-    // const formattedResponse = response.data.rows.map((row) => {
-    //   return {
-    //     channel: row.dimensionValues[0]?.value || "Unknown",
-    //     activeUsers: row.metricValues[0]?.value || "0",
-    //     newUsers: row.metricValues[1]?.value || "0",
-    //     eventCount: row.metricValues[2]?.value || "0",
-    //     sessions: row.metricValues[3]?.value || "0",
-    //   };
-    // });
-
+    // Format the response
     const formattedResponse = response.data.rows.map((row) => {
       return {
-        channel: row.dimensionValues[0]?.value || "Unknown", // Assumes "sessionDefaultChannelGrouping" is the first dimension
-        city: row.dimensionValues[1]?.value || "Unknown", // Assumes "city" is the second dimension
-        deviceCategory: row.dimensionValues[2]?.value || "Unknown", // If more dimensions are added, adjust indices
-
+        dimension: row.dimensionValues[0]?.value || "Unknown", // Use the selected dimension
         activeUsers: row.metricValues[0]?.value || "0",
         newUsers: row.metricValues[1]?.value || "0",
         eventCount: row.metricValues[2]?.value || "0",
         sessions: row.metricValues[3]?.value || "0",
         engagedSessions: row.metricValues[4]?.value || "0",
         bounceRate: row.metricValues[5]?.value || "0",
-        //ecommercePurchases: row.metricValues[6]?.value || "0",
       };
     });
 
@@ -2000,7 +2266,6 @@ app.post("/add-auth-user", verifyToken, async (req, res) => {
 //Request OTP
 app.post("/request-auth-otp", async (req, res) => {
   const { email } = req.body;
-  
 
   if (!email) {
     return res.status(400).json({ message: "Email is required" });
@@ -2107,7 +2372,7 @@ app.post("/verify-otp", async (req, res) => {
   }
 });
 
-app.get("/get-all-users",verifyToken, async (req, res) => {
+app.get("/get-all-users", verifyToken, async (req, res) => {
   try {
     const selectQuery = `
       SELECT id, name, email, user_type, created_by_id,status
@@ -2227,31 +2492,91 @@ app.get("/profile", verifyToken, async (req, res) => {
 });
 
 // API to assign a project to a user
-app.post('/assign-project',verifyToken, async (req, res) => {
+app.post("/assign-project", verifyToken, async (req, res) => {
   const { user_id, project_id } = req.body;
   const { id: assigned_by } = req.user;
 
-  // Validate input
   if (!user_id || !project_id || !assigned_by) {
-    return res.status(400).json({ error: 'user_id, project_id, and assigned_by are required' });
+    return res
+      .status(400)
+      .json({ error: "user_id, project_id, and assigned_by are required" });
   }
 
   try {
+    // Check if user exists
+    const userCheckQuery = "SELECT 1 FROM auth_users WHERE id = $1";
+    const userExists = await pool.query(userCheckQuery, [user_id]);
+
+    if (userExists.rowCount === 0) {
+      return res
+        .status(400)
+        .json({ error: "Invalid user_id: User does not exist" });
+    }
+
     const query = `
       INSERT INTO user_project_assignments (user_id, project_id, assigned_by)
       VALUES ($1, $2, $3)
       RETURNING *;
     `;
-
     const result = await pool.query(query, [user_id, project_id, assigned_by]);
 
     res.status(201).json({
-      message: 'Project assigned successfully',
+      message: "Project assigned successfully",
       assignment: result.rows[0],
     });
   } catch (error) {
-    console.error('Error assigning project:', error);
-    res.status(500).json({ error: 'Failed to assign project' });
+    if (error.code === "23505") {
+      // Unique constraint violation
+      return res
+        .status(400)
+        .json({ error: "This user is already assigned to this project" });
+    }
+    console.error("Error assigning project:", error);
+    res.status(500).json({ error: "Failed to assign project" });
+  }
+});
+
+app.get("/user-projects/:user_id", verifyToken, async (req, res) => {
+  const { user_id } = req.params;
+
+  if (!user_id) {
+    return res.status(400).json({ error: "user_id is required" });
+  }
+
+  try {
+    const query = `
+      SELECT 
+          p.id AS project_id,
+          p.name AS project_name,
+          p.description AS project_description,
+          upa.assigned_at,
+          au.id AS assigned_by_id,
+          au.name AS assigned_by_name
+      FROM 
+          user_project_assignments upa
+      JOIN 
+          projects p ON upa.project_id = p.id
+      JOIN 
+          auth_users au ON upa.assigned_by = au.id
+      WHERE 
+          upa.user_id = $1;
+    `;
+
+    const result = await pool.query(query, [user_id]);
+
+    if (result.rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No projects found for this user" });
+    }
+
+    res.status(200).json({
+      message: "Projects retrieved successfully",
+      projects: result.rows,
+    });
+  } catch (error) {
+    console.error("Error fetching user projects:", error);
+    res.status(500).json({ error: "Failed to fetch user projects" });
   }
 });
 
@@ -2738,7 +3063,7 @@ app.get("/project/:projectId/keywords", async (req, res) => {
     INNER JOIN Keyword_Website_mapping kwm ON k.id = kwm.keyword_id
     INNER JOIN websites w ON kwm.website_id = w.id
     WHERE k.project_id = $1
-    ORDER BY k.keyword, w.website;
+    ORDER BY k.keyword, w.website;  
   `;
 
   try {
@@ -3689,6 +4014,294 @@ app.patch("/update-scraping-job", async (req, res) => {
 // app.listen(PORT, () => {
 //   console.log(`Server is running on http://localhost:${PORT}`);
 // });
+
+// Fetch Data from MOZ API
+// Fetch Data from MOZ API
+const fetchMOZData = async (url) => {
+  const API_URL = "https://lsapi.seomoz.com/v2/url_metrics";
+  const API_KEY =
+    "bW96c2NhcGUtVndZbkZqaHF4bzo3UUdUMVpZMmh0aldvQ3RBRElOeENidUI2SXp4anRINg=="; // Replace with your actual token
+
+  const requestBody = {
+    targets: [url],
+    metrics: [
+      "domain_authority",
+      "spam_score",
+      "root_domains_linking",
+      "ranking_keywords",
+    ],
+  };
+
+  try {
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorMessage = `Error: ${response.status} ${response.statusText}`;
+      const errorDetails = await response.text(); // Get the response body for more details
+      throw new Error(`${errorMessage}\n${errorDetails}`);
+    }
+
+    const data = await response.json();
+    return data.results[0];
+  } catch (err) {
+    console.error("Error fetching data:", err.message); // Log more info
+    throw new Error(`Failed to fetch data from MOZ API: ${err.message}`);
+  }
+};
+
+// API Route to fetch and save MOZ data
+app.post("/api/fetchMozData", async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: "URL is required" });
+  }
+
+  try {
+    const mozData = await fetchMOZData(url);
+
+    // Save to PostgreSQL database
+    const query = `
+      INSERT INTO moz_data (url, domain_authority, spam_score, root_domains_linking)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (url) 
+      DO UPDATE SET
+        domain_authority = EXCLUDED.domain_authority,
+        spam_score = EXCLUDED.spam_score,
+        root_domains_linking = EXCLUDED.root_domains_linking;
+    `;
+    const values = [
+      url,
+      mozData.domain_authority,
+      mozData.spam_score,
+      mozData.root_domains_linking || 0,
+    ];
+    await pool.query(query, values);
+
+    res
+      .status(200)
+      .json({ message: "Data fetched and saved successfully", mozData });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch MOZ data" });
+  }
+});
+
+// API Route to generate meta titles and descriptions
+app.post("/api/generate-meta", async (req, res) => {
+  const { subject, context } = req.body;
+
+  if (!subject || !context) {
+    return res
+      .status(400)
+      .json({ message: "Subject and Context are required." });
+  }
+
+  try {
+    const openaiResponse = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-3.5-turbo", // Use "gpt-4" if you want the GPT-4 model
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an expert copywriter skilled in generating engaging meta titles and descriptions for web pages.",
+          },
+          {
+            role: "user",
+            content: `Generate 5 meta titles and descriptions for a webpage with the subject: "${subject}" and context: "${context}".\n\nMeta Titles and Descriptions:`,
+          },
+        ],
+        max_tokens: 300,
+        temperature: 0.7,
+        top_p: 1,
+        n: 1,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, // Use your API key here
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const generatedText = openaiResponse.data.choices[0].message.content.trim();
+    const lines = generatedText
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+
+    // Separate the lines into meta titles and descriptions
+    const metaTitles = lines.filter((_, index) => index % 2 === 0);
+    const metaDescriptions = lines.filter((_, index) => index % 2 === 1);
+
+    return res.json({
+      metaTitles,
+      metaDescriptions,
+    });
+  } catch (error) {
+    console.error("Error generating meta data:", error.response?.data || error);
+    return res.status(500).json({ message: "Error generating meta data." });
+  }
+});
+
+app.post("/api/generate-content", async (req, res) => {
+  const { subject, context, wordCount, bias, creativity } = req.body;
+
+  if (!subject || !context || !wordCount || !bias || !creativity) {
+    return res.status(400).json({
+      message:
+        "All fields are required: subject, context, wordCount, bias, and creativity.",
+    });
+  }
+
+  try {
+    const openaiResponse = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-3.5-turbo", // Switch to "gpt-4" if required
+        messages: [
+          {
+            role: "system",
+            content: `You are an AI assistant with a ${bias} tone. Generate content that is ${creativity}.`,
+          },
+          {
+            role: "user",
+            content: `Subject/Heading: ${subject}\nContext/Hints: ${context}\nPlease generate content with ${wordCount} words.`,
+          },
+        ],
+        max_tokens: Math.min(wordCount * 2, 4000), // Ensure word count fits OpenAI's token limits
+        temperature:
+          creativity === "creative"
+            ? 0.9
+            : creativity === "factual"
+            ? 0.2
+            : 0.5,
+        top_p: 1,
+        n: 1,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const generatedText = openaiResponse.data.choices[0].message.content.trim();
+
+    res.json({
+      content: generatedText,
+    });
+  } catch (error) {
+    console.error("Error generating content:", error.response?.data || error);
+    res.status(500).json({ message: "Error generating content." });
+  }
+});
+
+// API to fetch domain age
+app.post("/api/domain-age", async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: "URL is required" });
+  }
+
+  const domainRegex = /^(?:https?:\/\/)?(?:www\.)?([^\/]+)/i;
+  const match = url.match(domainRegex);
+  if (!match || !match[1]) {
+    return res.status(400).json({ error: "Invalid URL format." });
+  }
+
+  const domain = match[1];
+
+  try {
+    const response = await axios.get(
+      `http://api.whoapi.com/?apikey=${process.env.WHOAPI_KEY}&r=whois&domain=${domain}&ip=`
+    );
+
+    console.log("API Response:", response.data);
+
+    // Check the response for the domain age or related field
+    if (response.data && response.data.date_created) {
+      const createdDate = response.data.date_created;
+      const domainAge = calculateDomainAge(createdDate); // A function to calculate domain age from created date
+      return res.json({ domain_age: domainAge });
+    } else {
+      return res.status(404).json({ error: "Domain age data not found." });
+    }
+  } catch (error) {
+    console.error("Error fetching domain age:", error.message);
+    res.status(500).json({ error: "Failed to fetch domain information." });
+  }
+});
+
+// Helper function to calculate the domain age from the creation date
+function calculateDomainAge(createdDate) {
+  const creationDate = new Date(createdDate);
+  const currentDate = new Date();
+  const ageInMilliseconds = currentDate - creationDate;
+  const ageInYears = ageInMilliseconds / (1000 * 60 * 60 * 24 * 365); // Convert ms to years
+  return Math.floor(ageInYears); // Return rounded age in years
+}
+
+// Endpoint for DNS lookup
+app.post("/api/dns-check", (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: "URL is required" });
+  }
+
+  const domainRegex = /^(?:https?:\/\/)?(?:www\.)?([^\/]+)/i;
+  const match = url.match(domainRegex);
+  if (!match || !match[1]) {
+    return res.status(400).json({ error: "Invalid URL format." });
+  }
+
+  const domain = match[1];
+
+  const recordTypes = ["A", "AAAA", "MX", "TXT", "CNAME", "NS", "SOA"];
+
+  const dnsResults = {};
+
+  let queriesCompleted = 0;
+
+  recordTypes.forEach((type) => {
+    dns.resolve(domain, type, (err, records) => {
+      queriesCompleted++;
+
+      if (!err) {
+        dnsResults[type] = records;
+      } else {
+        dnsResults[type] = null; // or you can set it to an error message
+      }
+
+      // Check if all queries are completed
+      if (queriesCompleted === recordTypes.length) {
+        // Check if any records were found
+        const hasRecords = Object.values(dnsResults).some(
+          (records) => records !== null
+        );
+
+        if (!hasRecords) {
+          return res
+            .status(404)
+            .json({ error: "No DNS records found for the domain." });
+        }
+
+        res.json({ domain, dns: dnsResults });
+      }
+    });
+  });
+});
 
 const server = app.listen(PORT, () =>
   console.log(`Server running on port ${PORT}`)
