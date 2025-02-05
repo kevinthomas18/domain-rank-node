@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS analytics_accounts (
 );
 
 
-DROP TABLE IF EXISTS users;
+--DROP TABLE IF EXISTS users;
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT
 );
 
- DROP TABLE IF EXISTS auth_users;
+ --DROP TABLE IF EXISTS auth_users;
 
 CREATE TABLE IF NOT EXISTS auth_users (
     id SERIAL PRIMARY KEY,
