@@ -19,6 +19,7 @@ const authUrl = oauth2Client.generateAuthUrl({
     "https://www.googleapis.com/auth/webmasters",
     "https://www.googleapis.com/auth/business.manage",
     "https://www.googleapis.com/auth/plus.business.manage",
+    "https://www.googleapis.com/auth/adwords",
   ],
 });
 

@@ -37,16 +37,16 @@ const fs = require("fs");
 
 const dns = require("dns");
 
-// const schemaSQL = fs.readFileSync("schema.sql", "utf8");
+const schemaSQL = fs.readFileSync("schema.sql", "utf8");
 
-// pool.query(schemaSQL, (err, res) => {
-//   if (err) {
-//     console.error("Error creating tables:", err.stack);
-//   } else {
-//     console.log("Tables created successfully");
-//   }
-//   pool.end();
-// });
+pool.query(schemaSQL, (err, res) => {
+  if (err) {
+    console.error("Error creating tables:", err.stack);
+  } else {
+    console.log("Tables created successfully");
+  }
+  pool.end();
+});
 
 // Set up session middleware
 app.use(
@@ -65,6 +65,7 @@ app.use(express.json({ limit: "50mb" }));
 const openaiApiKey = process.env.OPENAI_API_KEY;
 
 const { google } = require("googleapis");
+const { GoogleAdsApi } = require("google-ads-api");
 const readline = require("readline");
 const { oauth2Client, authUrl, setCredentials } = require("./auth");
 
@@ -2705,8 +2706,8 @@ app.post("/keywords", verifyToken, async (req, res) => {
     project_id,
     keyword,
     search_engine,
-    search_location = "Default Location",
-    status = "Active", // Default value
+    search_location = "IN", // Default to India (ISO code)
+    status = "Active",
   } = req.body;
 
   const { id: created_by } = req.user;
@@ -2722,18 +2723,18 @@ app.post("/keywords", verifyToken, async (req, res) => {
       project_id,
       keyword,
       search_engine,
-      search_location,
+      search_location, // Store as country code
       created_by,
       status,
     ]);
 
-    const keywordData = result.rows[0]; // Since we're using RETURNING, result.rows contains the inserted data
+    const keywordData = result.rows[0];
 
     res.json({
       message: "Keyword created successfully",
       keyword: {
         ...keywordData,
-        created_date: new Date().toISOString(), // Add the created date manually if it's not in the database
+        created_date: new Date().toISOString(),
       },
     });
   } catch (err) {
@@ -4016,7 +4017,6 @@ app.patch("/update-scraping-job", async (req, res) => {
 // });
 
 // Fetch Data from MOZ API
-// Fetch Data from MOZ API
 const fetchMOZData = async (url) => {
   const API_URL = "https://lsapi.seomoz.com/v2/url_metrics";
   const API_KEY =
@@ -4067,23 +4067,33 @@ app.post("/api/fetchMozData", async (req, res) => {
   try {
     const mozData = await fetchMOZData(url);
 
-    // Save to PostgreSQL database
-    const query = `
-      INSERT INTO moz_data (url, domain_authority, spam_score, root_domains_linking)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (url) 
-      DO UPDATE SET
-        domain_authority = EXCLUDED.domain_authority,
-        spam_score = EXCLUDED.spam_score,
-        root_domains_linking = EXCLUDED.root_domains_linking;
+    // Get keys and values dynamically
+    const columns = Object.keys(mozData).map((key) =>
+      key.replace(/\s+/g, "_").toLowerCase()
+    );
+    const values = Object.values(mozData);
+
+    // Ensure the table has columns matching the keys
+    const createTableQuery = `
+      CREATE TABLE IF NOT EXISTS moz_data (
+        id SERIAL PRIMARY KEY,
+        url TEXT UNIQUE,
+        ${columns.map((col) => `${col} TEXT`).join(",\n        ")}
+      );
     `;
-    const values = [
-      url,
-      mozData.domain_authority,
-      mozData.spam_score,
-      mozData.root_domains_linking || 0,
-    ];
-    await pool.query(query, values);
+    await pool.query(createTableQuery);
+
+    // Insert or update data dynamically
+    const insertQuery = `
+      INSERT INTO moz_data (url, ${columns.join(", ")})
+      VALUES ($1, ${columns.map((_, i) => `$${i + 2}`).join(", ")})
+      ON CONFLICT (url) 
+      DO UPDATE SET ${columns
+        .map((col, i) => `${col} = EXCLUDED.${col}`)
+        .join(", ")};
+    `;
+
+    await pool.query(insertQuery, [url, ...values]);
 
     res
       .status(200)
@@ -4091,6 +4101,28 @@ app.post("/api/fetchMozData", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch MOZ data" });
+  }
+});
+
+app.get("/api/checkMozData", async (req, res) => {
+  const { url } = req.query;
+
+  if (!url) {
+    return res.status(400).json({ error: "URL is required" });
+  }
+
+  try {
+    const query = `SELECT * FROM moz_data WHERE url = $1`;
+    const result = await pool.query(query, [url]);
+
+    if (result.rows.length > 0) {
+      return res.status(200).json({ exists: true, mozData: result.rows[0] });
+    } else {
+      return res.status(200).json({ exists: false });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Database query failed" });
   }
 });
 
@@ -4152,13 +4184,75 @@ app.post("/api/generate-meta", async (req, res) => {
   }
 });
 
-app.post("/api/generate-content", async (req, res) => {
-  const { subject, context, wordCount, bias, creativity } = req.body;
+// app.post("/api/generate-content", async (req, res) => {
+//   const { subject, context, wordCount, bias, creativity } = req.body;
 
-  if (!subject || !context || !wordCount || !bias || !creativity) {
+//   if (!subject || !context || !wordCount || !bias || !creativity) {
+//     return res.status(400).json({
+//       message:
+//         "All fields are required: subject, context, wordCount, bias, and creativity.",
+//     });
+//   }
+
+//   try {
+//     const openaiResponse = await axios.post(
+//       "https://api.openai.com/v1/chat/completions",
+//       {
+//         model: "gpt-3.5-turbo", // Switch to "gpt-4" if required
+//         messages: [
+//           {
+//             role: "system",
+//             content: `You are an AI assistant with a ${bias} tone. Generate content that is ${creativity}.`,
+//           },
+//           {
+//             role: "user",
+//             content: `Subject/Heading: ${subject}\nContext/Hints: ${context}\nPlease generate content with ${wordCount} words.`,
+//           },
+//         ],
+//         max_tokens: Math.min(wordCount * 2, 4000), // Ensure word count fits OpenAI's token limits
+//         temperature:
+//           creativity === "creative"
+//             ? 0.9
+//             : creativity === "factual"
+//             ? 0.2
+//             : 0.5,
+//         top_p: 1,
+//         n: 1,
+//       },
+//       {
+//         headers: {
+//           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+//           "Content-Type": "application/json",
+//         },
+//       }
+//     );
+
+//     const generatedText = openaiResponse.data.choices[0].message.content.trim();
+
+//     res.json({
+//       content: generatedText,
+//     });
+//   } catch (error) {
+//     console.error("Error generating content:", error.response?.data || error);
+//     res.status(500).json({ message: "Error generating content." });
+//   }
+// });
+
+app.post("/api/generate-content", verifyToken, async (req, res) => {
+  const { subject, context, wordCount, bias, creativity, projectId } = req.body;
+  const { id: created_by } = req.user;
+
+  if (
+    !subject ||
+    !context ||
+    !wordCount ||
+    !bias ||
+    !creativity ||
+    !projectId
+  ) {
     return res.status(400).json({
       message:
-        "All fields are required: subject, context, wordCount, bias, and creativity.",
+        "All fields are required: subject, context, wordCount, bias, creativity, and projectId.",
     });
   }
 
@@ -4197,12 +4291,75 @@ app.post("/api/generate-content", async (req, res) => {
 
     const generatedText = openaiResponse.data.choices[0].message.content.trim();
 
+    // Save to PostgreSQL
+    const query = `
+      INSERT INTO generated_contents (project_id,created_by, subject, context, word_count, bias, creativity, generated_content)
+      VALUES ($1, $2, $3, $4, $5, $6, $7,$8)
+      RETURNING *;
+    `;
+    const values = [
+      projectId,
+      created_by,
+      subject,
+      context,
+      wordCount,
+      bias,
+      creativity,
+      generatedText,
+    ];
+
+    const dbResponse = await pool.query(query, values);
+
     res.json({
       content: generatedText,
+      dbEntry: dbResponse.rows[0],
     });
   } catch (error) {
     console.error("Error generating content:", error.response?.data || error);
     res.status(500).json({ message: "Error generating content." });
+  }
+});
+
+app.get("/api/generated-contents", verifyToken, async (req, res) => {
+  try {
+    const query = `
+      SELECT * FROM generated_contents
+      ORDER BY created_at DESC;
+    `;
+    const result = await pool.query(query);
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching generated contents:", error);
+    res.status(500).json({ message: "Error fetching generated contents." });
+  }
+});
+
+app.delete("/api/generated-contents/:id", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { id: created_by } = req.user;
+
+    // Ensure the content belongs to the user before deleting
+    const query = `
+      DELETE FROM generated_contents
+      WHERE id = $1 AND created_by = $2
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [id, created_by]);
+
+    if (result.rowCount === 0) {
+      return res
+        .status(404)
+        .json({ message: "Content not found or unauthorized." });
+    }
+
+    res.json({
+      message: "Content deleted successfully.",
+      deletedContent: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error deleting content:", error);
+    res.status(500).json({ message: "Error deleting content." });
   }
 });
 

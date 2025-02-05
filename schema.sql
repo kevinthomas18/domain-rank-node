@@ -1,6 +1,19 @@
+ DROP TABLE IF EXISTS analytics_accounts;
+
+CREATE TABLE IF NOT EXISTS analytics_accounts (
+    id SERIAL PRIMARY KEY,
+    account_name TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    property_name TEXT NOT NULL,
+    property_id TEXT NOT NULL,
+    fetched_by TEXT NOT NULL,
+    first_fetched_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    project_id INTEGER NOT NULL,
+    CONSTRAINT analytics_accounts_project_id_fk FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
 
 
- --DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS users;
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -9,7 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT
 );
 
- --DROP TABLE IF EXISTS auth_users;
+ DROP TABLE IF EXISTS auth_users;
 
 CREATE TABLE IF NOT EXISTS auth_users (
     id SERIAL PRIMARY KEY,
@@ -24,7 +37,7 @@ CREATE TABLE IF NOT EXISTS auth_users (
     otp_expiry TIMESTAMP
 );
 
---DROP TABLE IF EXISTS projects;
+DROP TABLE IF EXISTS projects;
 
 CREATE TABLE IF NOT EXISTS projects (
     id SERIAL PRIMARY KEY,
@@ -45,7 +58,7 @@ CREATE TABLE IF NOT EXISTS projects (
         ON DELETE NO ACTION
 );
 
---DROP TABLE IF EXISTS keywords;
+DROP TABLE IF EXISTS keywords;
 
 CREATE TABLE IF NOT EXISTS keywords (
     id SERIAL PRIMARY KEY,
@@ -56,17 +69,12 @@ CREATE TABLE IF NOT EXISTS keywords (
     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by INTEGER,
     status TEXT DEFAULT 'Active' CHECK (status IN ('Active', 'Inactive')),
-    CONSTRAINT keywords_created_by_fkey FOREIGN KEY (created_by)
-        REFERENCES public.auth_users (id) MATCH SIMPLE
-        ON UPDATE NO ACTION
-        ON DELETE NO ACTION,
-    CONSTRAINT keywords_project_id_fkey FOREIGN KEY (project_id)
-        REFERENCES public.projects (id) MATCH SIMPLE
-        ON UPDATE NO ACTION
-        ON DELETE NO ACTION
+    CONSTRAINT keywords_project_id_fk FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CONSTRAINT keywords_created_by_fk FOREIGN KEY (created_by) REFERENCES auth_users(id) ON DELETE SET NULL
 );
 
---DROP TABLE IF EXISTS rankhistory;
+
+DROP TABLE IF EXISTS rankhistory;
 
 CREATE TABLE IF NOT EXISTS rankhistory (
     id SERIAL PRIMARY KEY,
@@ -80,7 +88,7 @@ CREATE TABLE IF NOT EXISTS rankhistory (
         ON DELETE NO ACTION
 );
 
---DROP TABLE IF EXISTS websites;
+DROP TABLE IF EXISTS websites;
 
 CREATE TABLE IF NOT EXISTS websites (
     id SERIAL PRIMARY KEY,
@@ -101,7 +109,7 @@ CREATE TABLE IF NOT EXISTS websites (
         ON DELETE NO ACTION
 );
 
---DROP TABLE IF EXISTS keyword_website_mapping;
+DROP TABLE IF EXISTS keyword_website_mapping;
 
 CREATE TABLE IF NOT EXISTS keyword_website_mapping (
     id SERIAL PRIMARY KEY,
@@ -120,7 +128,7 @@ CREATE TABLE IF NOT EXISTS keyword_website_mapping (
         ON DELETE NO ACTION
 );
 
---DROP TABLE IF EXISTS site_audits;
+DROP TABLE IF EXISTS site_audits;
 
 CREATE TABLE IF NOT EXISTS site_audits (
     id SERIAL PRIMARY KEY,
@@ -135,7 +143,7 @@ CREATE TABLE IF NOT EXISTS site_audits (
         ON DELETE CASCADE
 );
 
---DROP TABLE IF EXISTS site_audit_pages;
+DROP TABLE IF EXISTS site_audit_pages;
 
 CREATE TABLE IF NOT EXISTS site_audit_pages (
     id SERIAL PRIMARY KEY,
@@ -158,8 +166,8 @@ CREATE TABLE IF NOT EXISTS site_audit_pages (
         ON DELETE CASCADE
 );
 
--- Drop and recreate site_audit_images table
---DROP TABLE IF EXISTS site_audit_images;
+
+DROP TABLE IF EXISTS site_audit_images;
 
 CREATE TABLE IF NOT EXISTS site_audit_images (
     id SERIAL PRIMARY KEY,
@@ -178,8 +186,8 @@ CREATE TABLE IF NOT EXISTS site_audit_images (
         ON DELETE CASCADE
 );
 
--- Drop and recreate scraping_jobs table
---DROP TABLE IF EXISTS scraping_jobs;
+
+DROP TABLE IF EXISTS scraping_jobs;
 
 CREATE TABLE IF NOT EXISTS scraping_jobs (
     id SERIAL PRIMARY KEY,
@@ -197,8 +205,8 @@ CREATE TABLE IF NOT EXISTS scraping_jobs (
         ON DELETE CASCADE
 );
 
--- Drop and recreate analytics_accounts table
---DROP TABLE IF EXISTS analytics_accounts;
+
+DROP TABLE IF EXISTS analytics_accounts;
 
 CREATE TABLE IF NOT EXISTS analytics_accounts (
     id SERIAL PRIMARY KEY,
@@ -211,8 +219,8 @@ CREATE TABLE IF NOT EXISTS analytics_accounts (
     project_id INTEGER NOT NULL
 );
 
--- Drop and recreate backlink_websites table
---DROP TABLE IF EXISTS backlink_websites;
+
+DROP TABLE IF EXISTS backlink_websites;
 
 CREATE TABLE IF NOT EXISTS backlink_websites (
     id SERIAL PRIMARY KEY,
@@ -226,8 +234,8 @@ CREATE TABLE IF NOT EXISTS backlink_websites (
     created_by VARCHAR(255)
 );
 
--- Drop and recreate backlinks table
---DROP TABLE IF EXISTS backlinks;
+
+DROP TABLE IF EXISTS backlinks;
 
 CREATE TABLE IF NOT EXISTS backlinks (
     id SERIAL PRIMARY KEY,
@@ -246,8 +254,8 @@ CREATE TABLE IF NOT EXISTS backlinks (
     CONSTRAINT backlinks_source_check CHECK (source IN ('Manual', 'Search Console', 'Google Analytics'))
 );
 
--- Drop and recreate search_console_sites table
---DROP TABLE IF EXISTS search_console_sites;
+
+DROP TABLE IF EXISTS search_console_sites;
 
 CREATE TABLE IF NOT EXISTS search_console_sites (
     id SERIAL PRIMARY KEY,
@@ -255,8 +263,8 @@ CREATE TABLE IF NOT EXISTS search_console_sites (
     first_fetched_date DATE,
     fetched_by VARCHAR(255)
 );
--- Drop and recreate settings table
---DROP TABLE IF EXISTS settings;
+
+DROP TABLE IF EXISTS settings;
 
 CREATE TABLE IF NOT EXISTS settings (
     key VARCHAR(255) NOT NULL,
@@ -265,8 +273,8 @@ CREATE TABLE IF NOT EXISTS settings (
     CONSTRAINT settings_pkey PRIMARY KEY (key)
 );
 
--- Drop and recreate websites_monitor table
---DROP TABLE IF EXISTS websites_monitor;
+
+DROP TABLE IF EXISTS websites_monitor;
 
 CREATE TABLE IF NOT EXISTS websites_monitor (
     id SERIAL PRIMARY KEY,
@@ -275,8 +283,8 @@ CREATE TABLE IF NOT EXISTS websites_monitor (
     last_check_time TIMESTAMP
 );
 
--- Drop and recreate websites_monitor_history table
---DROP TABLE IF EXISTS websites_monitor_history;
+
+DROP TABLE IF EXISTS websites_monitor_history;
 
 CREATE TABLE IF NOT EXISTS websites_monitor_history (
     id SERIAL PRIMARY KEY,
@@ -289,6 +297,100 @@ CREATE TABLE IF NOT EXISTS websites_monitor_history (
         ON DELETE NO ACTION,
     CONSTRAINT websites_monitor_history_status_check CHECK (status IN ('Success', 'Fail', 'Slow'))
 );
+
+DROP TABLE IF EXISTS generated_contents;
+
+CREATE TABLE IF NOT EXISTS generated_contents (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER NOT NULL,
+    created_by INTEGER NOT NULL,
+    subject TEXT NOT NULL,
+    context TEXT NOT NULL,
+    word_count INTEGER NOT NULL,
+    bias VARCHAR(50) NOT NULL,
+    creativity VARCHAR(50) NOT NULL,
+    generated_content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT generated_contents_project_id_fk FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CONSTRAINT generated_contents_created_by_fk FOREIGN KEY (created_by) REFERENCES auth_users(id) ON DELETE SET NULL
+);
+
+ DROP TABLE IF EXISTS moz_data;
+
+CREATE TABLE IF NOT EXISTS moz_data (
+    id SERIAL PRIMARY KEY,
+    url TEXT UNIQUE NOT NULL,
+    page TEXT,
+    subdomain TEXT,
+    root_domain TEXT,
+    title TEXT,
+    last_crawled TIMESTAMP,
+    http_code TEXT,
+    pages_to_page INTEGER DEFAULT 0,
+    nofollow_pages_to_page INTEGER DEFAULT 0,
+    redirect_pages_to_page INTEGER DEFAULT 0,
+    external_pages_to_page INTEGER DEFAULT 0,
+    external_nofollow_pages_to_page INTEGER DEFAULT 0,
+    external_redirect_pages_to_page INTEGER DEFAULT 0,
+    deleted_pages_to_page INTEGER DEFAULT 0,
+    root_domains_to_page INTEGER DEFAULT 0,
+    indirect_root_domains_to_page INTEGER DEFAULT 0,
+    deleted_root_domains_to_page INTEGER DEFAULT 0,
+    nofollow_root_domains_to_page INTEGER DEFAULT 0,
+    pages_to_subdomain INTEGER DEFAULT 0,
+    nofollow_pages_to_subdomain INTEGER DEFAULT 0,
+    redirect_pages_to_subdomain INTEGER DEFAULT 0,
+    external_pages_to_subdomain INTEGER DEFAULT 0,
+    external_nofollow_pages_to_subdomain INTEGER DEFAULT 0,
+    external_redirect_pages_to_subdomain INTEGER DEFAULT 0,
+    deleted_pages_to_subdomain INTEGER DEFAULT 0,
+    root_domains_to_subdomain INTEGER DEFAULT 0,
+    deleted_root_domains_to_subdomain INTEGER DEFAULT 0,
+    nofollow_root_domains_to_subdomain INTEGER DEFAULT 0,
+    pages_to_root_domain INTEGER DEFAULT 0,
+    nofollow_pages_to_root_domain INTEGER DEFAULT 0,
+    redirect_pages_to_root_domain INTEGER DEFAULT 0,
+    external_pages_to_root_domain INTEGER DEFAULT 0,
+    external_indirect_pages_to_root_domain INTEGER DEFAULT 0,
+    external_nofollow_pages_to_root_domain INTEGER DEFAULT 0,
+    external_redirect_pages_to_root_domain INTEGER DEFAULT 0,
+    deleted_pages_to_root_domain INTEGER DEFAULT 0,
+    root_domains_to_root_domain INTEGER DEFAULT 0,
+    indirect_root_domains_to_root_domain INTEGER DEFAULT 0,
+    deleted_root_domains_to_root_domain INTEGER DEFAULT 0,
+    nofollow_root_domains_to_root_domain INTEGER DEFAULT 0,
+    page_authority DECIMAL(5,2),
+    domain_authority DECIMAL(5,2),
+    link_propensity DECIMAL(5,2),
+    spam_score DECIMAL(5,2),
+    root_domains_from_page INTEGER DEFAULT 0,
+    nofollow_root_domains_from_page INTEGER DEFAULT 0,
+    pages_from_page INTEGER DEFAULT 0,
+    nofollow_pages_from_page INTEGER DEFAULT 0,
+    root_domains_from_root_domain INTEGER DEFAULT 0,
+    nofollow_root_domains_from_root_domain INTEGER DEFAULT 0,
+    pages_from_root_domain INTEGER DEFAULT 0,
+    nofollow_pages_from_root_domain INTEGER DEFAULT 0,
+    pages_crawled_from_root_domain INTEGER DEFAULT 0
+);
+
+DROP TABLE IF EXISTS user_project_assignments;
+
+CREATE TABLE IF NOT EXISTS user_project_assignments (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    project_id INTEGER NOT NULL,
+    assigned_by INTEGER NOT NULL,
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_user_project UNIQUE (user_id, project_id),
+    CONSTRAINT fk_assigned_by FOREIGN KEY (assigned_by)
+        REFERENCES auth_users (id) ON UPDATE CASCADE ON DELETE SET NULL,
+    CONSTRAINT fk_user_id FOREIGN KEY (user_id)
+        REFERENCES auth_users (id) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_project_id FOREIGN KEY (project_id)
+        REFERENCES projects (id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
 
 
 -- -- Recreate tables
