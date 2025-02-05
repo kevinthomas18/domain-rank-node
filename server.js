@@ -37,16 +37,16 @@ const fs = require("fs");
 
 const dns = require("dns");
 
-const schemaSQL = fs.readFileSync("schema.sql", "utf8");
+// const schemaSQL = fs.readFileSync("schema.sql", "utf8");
 
-pool.query(schemaSQL, (err, res) => {
-  if (err) {
-    console.error("Error creating tables:", err.stack);
-  } else {
-    console.log("Tables created successfully");
-  }
-  pool.end();
-});
+// pool.query(schemaSQL, (err, res) => {
+//   if (err) {
+//     console.error("Error creating tables:", err.stack);
+//   } else {
+//     console.log("Tables created successfully");
+//   }
+//   pool.end();
+// });
 
 // Set up session middleware
 app.use(
